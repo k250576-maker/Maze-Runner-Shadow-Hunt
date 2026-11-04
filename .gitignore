@@ -9,3 +9,6 @@
 .env
 .env.*
 !.env.example
+
+# Laptop-only Mesa launcher.
+/run.ps1

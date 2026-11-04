@@ -52,33 +52,30 @@
                                          ]
                   },
                   {
-                      "label":  "Run (Mesa)",
+                      "label":  "Run",
                       "problemMatcher":  [
 
                                          ],
-                      "command":  "powershell.exe",
+                      "command":  "${workspaceFolder}/build/game.exe",
                       "type":  "process",
                       "args":  [
-                                   "-NoProfile",
-                                   "-File",
-                                   "${workspaceFolder}/run.ps1"
+
                                ],
                       "options":  {
                                       "cwd":  "${workspaceFolder}",
                                       "env":  {
-                                                  "GALLIUM_DRIVER":  "llvmpipe",
-                                                  "MESA_LOADER_DRIVER_OVERRIDE":  "llvmpipe"
+                                                  "PATH":  "C:\\msys64\\ucrt64\\bin;${env:PATH}"
                                               }
                                   }
                   },
                   {
-                      "label":  "Build and Run (Mesa)",
+                      "label":  "Build and Run",
                       "problemMatcher":  [
 
                                          ],
                       "dependsOn":  [
                                         "Build",
-                                        "Run (Mesa)"
+                                        "Run"
                                     ],
                       "dependsOrder":  "sequence"
                   }
