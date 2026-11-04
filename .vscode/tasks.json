@@ -1,0 +1,86 @@
+{
+    "version":  "2.0.0",
+    "tasks":  [
+                  {
+                      "label":  "Prepare build directory",
+                      "problemMatcher":  [
+
+                                         ],
+                      "command":  "powershell.exe",
+                      "type":  "process",
+                      "args":  [
+                                   "-NoProfile",
+                                   "-Command",
+                                   "New-Item -ItemType Directory -Force -Path build | Out-Null"
+                               ],
+                      "options":  {
+                                      "cwd":  "${workspaceFolder}"
+                                  }
+                  },
+                  {
+                      "dependsOn":  "Prepare build directory",
+                      "group":  {
+                                    "kind":  "build",
+                                    "isDefault":  true
+                                },
+                      "type":  "process",
+                      "command":  "C:/msys64/ucrt64/bin/g++.exe",
+                      "label":  "Build",
+                      "options":  {
+                                      "cwd":  "${workspaceFolder}",
+                                      "env":  {
+                                                  "PATH":  "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+                                              }
+                                  },
+                      "args":  [
+                                   "-std=c++17",
+                                   "-g",
+                                   "-Wall",
+                                   "-Wextra",
+                                   "-I",
+                                   "${workspaceFolder}/include",
+                                   "${workspaceFolder}/src/main.cpp",
+                                   "-o",
+                                   "${workspaceFolder}/build/game.exe",
+                                   "-lraylib",
+                                   "-lopengl32",
+                                   "-lgdi32",
+                                   "-lwinmm"
+                               ],
+                      "problemMatcher":  [
+                                             "$gcc"
+                                         ]
+                  },
+                  {
+                      "label":  "Run (Mesa)",
+                      "problemMatcher":  [
+
+                                         ],
+                      "command":  "powershell.exe",
+                      "type":  "process",
+                      "args":  [
+                                   "-NoProfile",
+                                   "-File",
+                                   "${workspaceFolder}/run.ps1"
+                               ],
+                      "options":  {
+                                      "cwd":  "${workspaceFolder}",
+                                      "env":  {
+                                                  "GALLIUM_DRIVER":  "llvmpipe",
+                                                  "MESA_LOADER_DRIVER_OVERRIDE":  "llvmpipe"
+                                              }
+                                  }
+                  },
+                  {
+                      "label":  "Build and Run (Mesa)",
+                      "problemMatcher":  [
+
+                                         ],
+                      "dependsOn":  [
+                                        "Build",
+                                        "Run (Mesa)"
+                                    ],
+                      "dependsOrder":  "sequence"
+                  }
+              ]
+}

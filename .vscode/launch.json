@@ -1,0 +1,51 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "args": [],
+      "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb.exe",
+      "type": "cppdbg",
+      "cwd": "${workspaceFolder}",
+      "externalConsole": false,
+      "environment": [
+        {
+          "value": "C:\\msys64\\ucrt64\\bin;${env:PATH}",
+          "name": "PATH"
+        },
+        {
+          "value": "llvmpipe",
+          "name": "GALLIUM_DRIVER"
+        },
+        {
+          "value": "llvmpipe",
+          "name": "MESA_LOADER_DRIVER_OVERRIDE"
+        }
+      ],
+      "name": "Debug (Mesa)",
+      "MIMode": "gdb",
+      "stopAtEntry": false,
+      "preLaunchTask": "Build",
+      "program": "${workspaceFolder}/build/game.exe",
+      "request": "launch"
+    },
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "cppdbg",
+      "request": "launch",
+      "args": [],
+      "stopAtEntry": false,
+      "externalConsole": true,
+      "cwd": "d:/DSA/Project",
+      "program": "d:/DSA/Project/build/Debug/outDebug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
+}

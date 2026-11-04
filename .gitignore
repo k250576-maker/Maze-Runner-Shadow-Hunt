@@ -1,0 +1,11 @@
+/build/
+*.exe
+*.o
+*.obj
+*.pdb
+# Machine-local runtime libraries, including Mesa.
+*.dll
+# Local environment files and credentials.
+.env
+.env.*
+!.env.example
