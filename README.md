@@ -67,3 +67,31 @@ with the same build, pass an unsigned 32-bit seed.
   logical grid renders as 61 × 61 physical tiles. A future Kruskal generator
   can produce the same `PassageGraph` while reusing the tile carving and
   reachability checks.
+
+## Audio and exploration map
+
+The game streams `dungeon002.ogg` by default. Choose another soundtrack
+with `--music dark-cavern`, `--music deep-dungeon`, or `--music off`.
+The seed and music flags can be combined. See [audio credits](assets/audio/CREDITS.txt)
+for license and local asset details.
+
+```powershell
+& ./build/game.exe --seed 42 --music deep-dungeon
+```
+
+Hold a movement key to hear steps timed by actual distance traveled.
+`include/game_audio.h` contains the soundtrack, mix, and stride settings.
+
+Press **M** to expand the parchment map. **M** or **Esc** closes it.
+The **I** controls panel and the expanded map both pause player movement.
+The compact map shows the nearby portion of the chart.
+
+`include/exploration_map.h` stores a 2D array of unknown, passage, and
+wall states for the current run. When the player changes cells, a bounded
+BFS reuses the maze's custom queue. It follows four-directional walkable
+neighbors up to `RevealRadius` steps away and records the walls bordering
+those passages. Walls never enter the queue, so adjacent disconnected
+corridors stay hidden. Each new run starts with an empty chart.
+`CompactCells` and `CompactCellPixels` in `include/parchment_map.h` set
+the minimap's coverage and size. `ExpandedMargin` controls the larger map's
+padding, and the expanded tile size fits the available window.
