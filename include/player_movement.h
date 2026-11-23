@@ -2,17 +2,19 @@
 #define SHADOW_HUNT_PLAYER_MOVEMENT_H
 
 #include "maze.h"
+#include "furniture.h"
 #include <algorithm>
 #include <cmath>
 
 namespace Movement
 {
-// Adjust this to change travel speed; 4 means 0.25 seconds per cell.
-constexpr float CellsPerSecond = 4.0f;
+// World pixels per second. 128 keeps the previous travel speed.
+constexpr float PixelsPerSecond = 128.0f;
+constexpr float CollisionHalfSize = 9.0f;
 constexpr float AnimationFramesPerSecond = 8.0f;
 enum class Direction { None, Left, Right, Up, Down };
 
-struct Cell { int column; int row; };
+using Cell = Maze::Cell;
 struct Position { float x; float y; };
 
 inline Position Center(Cell cell)
@@ -21,98 +23,114 @@ inline Position Center(Cell cell)
             (cell.row + 0.5f) * Maze::CellSize};
 }
 
+inline int CellIndex(float coordinate)
+{
+    return static_cast<int>(std::floor(coordinate / Maze::CellSize));
+}
+
+// The cell containing the player's ground position, independent of the collider's footprint.
+inline Cell CellAt(Position position)
+{
+    return {CellIndex(position.x), CellIndex(position.y)};
+}
+
 struct Player
 {
-    Cell current{Maze::SpawnColumn, Maze::SpawnRow};
-    Cell target = current;
-    Position visual = Center(current);
-    float progress = 0;
-    bool moving = false;
+    Position position{};
     Direction facing = Direction::Down;
-    Direction queued = Direction::None;
     float animationTime = 0;
     int animationFrame = 1; // Middle column is the idle pose.
 };
 
-inline Cell Adjacent(Cell cell, Direction direction)
+inline int LastOverlappedCell(float edge)
 {
+    // An edge exactly on a grid line touches, but does not overlap, the next cell.
+    return static_cast<int>(std::ceil(edge / Maze::CellSize)) - 1;
+}
+
+inline float SweepWalls(const Maze::Layout& level, float center, float across, float displacement, bool horizontal)
+{
+    const int axisCells = horizontal ? Maze::Columns : Maze::Rows;
+    const float destination = std::clamp(center + displacement, 0.0f,
+                                         static_cast<float>(axisCells * Maze::CellSize));
+    if (destination == center) return center;
+
+    const int step = destination > center ? 1 : -1;
+    const float leadingOffset = step * CollisionHalfSize;
+    const float startEdge = center + leadingOffset;
+    const float endEdge = destination + leadingOffset;
+    const int first = step > 0 ? CellIndex(startEdge) : LastOverlappedCell(startEdge);
+    const int last = step > 0 ? LastOverlappedCell(endEdge) : CellIndex(endEdge);
+    const int acrossFirst = CellIndex(across - CollisionHalfSize);
+    const int acrossLast = LastOverlappedCell(across + CollisionHalfSize);
+
+    // Check every crossed strip across the full collider to catch walls even during a long frame.
+    for (int tile = first; step > 0 ? tile <= last : tile >= last; tile += step)
+    {
+        for (int other = acrossFirst; other <= acrossLast; ++other)
+        {
+            if (level.IsWalkable(horizontal ? tile : other, horizontal ? other : tile)) continue;
+            const int wallFace = step > 0 ? tile : tile + 1;
+            return wallFace * Maze::CellSize - leadingOffset;
+        }
+    }
+    return destination;
+}
+
+inline float SweepAxis(const Maze::Layout& level, float center, float across, float displacement, bool horizontal)
+{
+    float destination = SweepWalls(level, center, across, displacement, horizontal);
+    if (destination == center) return center;
+
+    for (const Furniture::Placement prop : Furniture::Placements)
+    {
+        if (!Furniture::IsSolid(prop)) continue;
+        const Furniture::Footprint base = Furniture::Base(prop);
+        const float acrossMin = horizontal ? base.top : base.left;
+        const float acrossMax = horizontal ? base.bottom : base.right;
+        if (across + CollisionHalfSize <= acrossMin || across - CollisionHalfSize >= acrossMax) continue;
+
+        // Sweep the center against the footprint expanded by the player's hitbox.
+        if (displacement > 0)
+        {
+            const float contact = (horizontal ? base.left : base.top) - CollisionHalfSize;
+            if (center <= contact) destination = std::min(destination, contact);
+        }
+        else
+        {
+            const float contact = (horizontal ? base.right : base.bottom) + CollisionHalfSize;
+            if (center >= contact) destination = std::max(destination, contact);
+        }
+    }
+    return destination;
+}
+
+inline void Update(Player& player, const Maze::Layout& level, float dt, Direction direction)
+{
+    const Position start = player.position;
+    if (direction != Direction::None) player.facing = direction;
+    const float distance = PixelsPerSecond * std::max(dt, 0.0f);
     switch (direction)
     {
-        case Direction::Left: --cell.column; break;
-        case Direction::Right: ++cell.column; break;
-        case Direction::Up: --cell.row; break;
-        case Direction::Down: ++cell.row; break;
+        case Direction::Left: player.position.x = SweepAxis(level, start.x, start.y, -distance, true); break;
+        case Direction::Right: player.position.x = SweepAxis(level, start.x, start.y, distance, true); break;
+        case Direction::Up: player.position.y = SweepAxis(level, start.y, start.x, -distance, false); break;
+        case Direction::Down: player.position.y = SweepAxis(level, start.y, start.x, distance, false); break;
         case Direction::None: break;
     }
-    return cell;
-}
 
-inline bool CanMove(Cell cell, Direction direction)
-{
-    const Cell next = Adjacent(cell, direction);
-    return direction != Direction::None && Maze::IsWalkable(next.column, next.row);
-}
-
-inline bool StartStep(Player& player, Direction direction)
-{
-    if (direction == Direction::None) return false;
-    player.facing = direction;
-    if (!CanMove(player.current, direction)) return false;
-    player.target = Adjacent(player.current, direction);
-    player.progress = 0;
-    player.moving = true;
-    return true;
-}
-
-// Input is passed in separately so transitions can be checked without a window.
-// A tapped turn is buffered for the next cell; a held key repeats movement.
-inline void Update(Player& player, float dt, Direction held, Direction pressed)
-{
-    if (player.moving && pressed != Direction::None && pressed != player.facing)
-        player.queued = pressed;
-
-    float remaining = std::max(dt, 0.0f);
-    while (remaining > 0)
-    {
-        if (!player.moving)
-        {
-            const Direction queued = player.queued;
-            player.queued = Direction::None;
-            // A blocked buffered turn is discarded; a held direction can continue.
-            if (!StartStep(player, queued) && !StartStep(player, held)) break;
-        }
-        const float needed = (1.0f - player.progress) / CellsPerSecond;
-        const float elapsed = std::min(remaining, needed);
-        player.progress += elapsed * CellsPerSecond;
-        player.animationTime = std::fmod(player.animationTime + elapsed, 0.5f);
-        remaining -= elapsed;
-        const Position start = Center(player.current);
-        const Position end = Center(player.target);
-        player.visual = {start.x + (end.x - start.x) * player.progress,
-                         start.y + (end.y - start.y) * player.progress};
-        if (elapsed >= needed)
-        {
-            player.current = player.target;
-            player.visual = end; // Exact center: avoid accumulating position drift.
-            player.progress = 0;
-            player.moving = false;
-        }
-    }
-
-    const bool continuing = CanMove(player.current, player.queued)
-                         || CanMove(player.current, held);
-    if (!player.moving && !continuing)
+    const float traveled = std::abs(player.position.x - start.x) + std::abs(player.position.y - start.y);
+    if (traveled == 0)
     {
         player.animationTime = 0;
         player.animationFrame = 1;
+        return;
     }
-    else
-    {
-        // Left stride, neutral, right stride, neutral, using inspected columns.
-        constexpr int WalkCycle[] = {0, 1, 2, 1};
-        player.animationFrame = WalkCycle[static_cast<int>(player.animationTime
-                                      * AnimationFramesPerSecond) % 4];
-    }
+
+    constexpr int WalkCycle[] = {0, 1, 2, 1};
+    constexpr float cycleDuration = 4.0f / AnimationFramesPerSecond;
+    player.animationTime = std::fmod(player.animationTime + traveled / PixelsPerSecond, cycleDuration);
+    player.animationFrame = WalkCycle[static_cast<int>(player.animationTime * AnimationFramesPerSecond) % 4];
 }
 }
 #endif

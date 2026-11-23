@@ -1,7 +1,7 @@
 # Maze Runner - Shadow Hunt
 
 University C++ DSA Lab project using the normal installed Raylib 6.2 library
-and its OpenGL 3.3 renderer. The existing window test is unchanged.
+and its OpenGL 3.3 renderer.
 
 ## Structure
 
@@ -42,3 +42,28 @@ Raylib library and sets no Mesa environment variables.
 A laptop-specific Mesa workaround may be kept locally in the ignored `build/`
 folder, with an optional ignored `run.ps1` launcher. These files are not part
 of the shared project.
+
+## Generated labyrinth
+
+Each launch picks a new seed and logs it to the terminal. To replay a layout
+with the same build, pass an unsigned 32-bit seed.
+
+```powershell
+& ./build/game.exe --seed 42
+```
+
+- `include/maze_generation.h` uses randomized depth-first search with a custom
+  stack. It visits each passage vertex once, backtracks at dead ends, and
+  opens eight additional connections to create alternate routes.
+- The generator converts the logical graph to physical tiles only after
+  selecting the connections. Most corridors are two tiles wide. Selected
+  bands are three tiles wide, and occasional gates narrow to one tile. A
+  stone separator stays in place wherever the graph has no connection.
+- Each of the four chamber bays has a single doorway. Breadth-first search
+  uses a custom queue to visit the physical floor tiles from spawn. It checks
+  that every floor tile is reachable and reserves a future exit at the
+  farthest reachable tile in the three non-entrance chambers.
+- `include/maze.h` controls the graph dimensions. The default 19 × 19
+  logical grid renders as 61 × 61 physical tiles. A future Kruskal generator
+  can produce the same `PassageGraph` while reusing the tile carving and
+  reachability checks.
