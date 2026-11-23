@@ -1,27 +1,83 @@
 #include "raylib.h"
-#include "maze.h"
-#include "player_movement.h"
-#include "lighting.h"
-#include "candles.h"
-#include "candle_renderer.h"
+// Use this project's headers even when VS Code opens the shared parent folder.
+#include "../include/maze_generation.h"
+#include "../include/dungeon_art.h"
+#include "../include/game_hud.h"
+#include "../include/player_movement.h"
+#include "../include/lighting.h"
+#include "../include/torches.h"
+#include <algorithm>
+#include <charconv>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <string>
+#include <string_view>
 
 namespace
 {
-constexpr int Margin = 24;
-constexpr int MazeTop = 80;
-constexpr int ScreenWidth = Maze::Columns * Maze::CellSize + Margin * 2;
-constexpr int ScreenHeight = MazeTop + Maze::Rows * Maze::CellSize + 48;
-// Individually inspected swatches, not an atlas-wide grid.
-constexpr Rectangle FloorSource{736, 208, 32, 32};
-constexpr Rectangle WallSource{736, 272, 32, 32};
+constexpr int DefaultWindowWidth = 720;
+constexpr int DefaultWindowHeight = 608;
+constexpr float BaseCameraZoom = 2.0f;
+constexpr float CameraFollowSpeed = 10.0f;
+constexpr float MaxVisibleWorldSpan = 20.0f * Maze::CellSize;
+constexpr Color HudBackground{13, 15, 20, 255};
 constexpr int FrameWidth = 16;
 constexpr int FrameHeight = 32;
 
 using Movement::Direction;
 using Movement::Player;
-static_assert(Candles::StartingInventory <= Lighting::MaxStaticLights,
-              "Lighting storage must cover all placeable candles.");
+static_assert(Maze::MaxTorches <= Lighting::MaxStaticLights,
+              "Lighting storage must cover every torch.");
+
+struct Viewport
+{
+    int width;
+    int height;
+    float hudScale;
+    float zoom;
+};
+
+Viewport MakeViewport(int width, int height)
+{
+    const float heightScale = static_cast<float>(height) / DefaultWindowHeight;
+    const float hudScale = std::min(heightScale, static_cast<float>(width) / DefaultWindowWidth);
+    // Whole-number zoom maps world pixels to equal-sized blocks of screen pixels.
+    const float localZoom = std::ceil(std::max(width, height) / MaxVisibleWorldSpan);
+    const float zoom = std::max({1.0f, localZoom, std::round(BaseCameraZoom * heightScale)});
+    return {width, height, hudScale, zoom};
+}
+
+Vector2 ClampCameraCenter(Vector2 center, const Viewport& view)
+{
+    constexpr float worldWidth = Maze::Columns * Maze::CellSize;
+    constexpr float worldHeight = Maze::Rows * Maze::CellSize;
+    const float halfWidth = std::min(view.width / view.zoom, worldWidth) * 0.5f;
+    const float halfHeight = std::min(view.height / view.zoom, worldHeight) * 0.5f;
+    return {
+        std::clamp(center.x, halfWidth, worldWidth - halfWidth),
+        std::clamp(center.y, halfHeight, worldHeight - halfHeight)};
+}
+
+Camera2D FollowCamera(Vector2& center, Vector2 player, const Viewport& view, float dt)
+{
+    const Vector2 target = ClampCameraCenter(player, view);
+    const float blend = 1.0f - std::exp(-CameraFollowSpeed * dt);
+    center.x += (target.x - center.x) * blend;
+    center.y += (target.y - center.y) * blend;
+    center = ClampCameraCenter(center, view);
+    const float screenX = view.width * 0.5f;
+    const float screenY = view.height * 0.5f;
+    // Snap the translation to a screen pixel while retaining the smooth center.
+    return {{std::round(screenX - center.x * view.zoom), std::round(screenY - center.y * view.zoom)},
+            {0, 0}, 0, view.zoom};
+}
+
+Rectangle VisibleDungeon(const Viewport& view, Camera2D camera)
+{
+    const Vector2 topLeft = GetScreenToWorld2D({0, 0}, camera);
+    return {topLeft.x, topLeft.y, view.width / view.zoom, view.height / view.zoom};
+}
 
 bool DirectionKeyDown(Direction direction)
 {
@@ -62,38 +118,38 @@ std::string AssetRoot()
     return std::string(GetApplicationDirectory()) + "../assets/";
 }
 
-void UpdatePlayer(Player& player, float dt)
+void UpdatePlayer(Player& player, const Maze::Layout& level, float dt, bool controlsOpen)
 {
-    const Direction pressed = PressedDirection();
-    Direction held = Direction::None;
-    // Favor a fresh press, then a buffered turn, then the current direction.
-    if (pressed != Direction::None) held = pressed;
-    else if (DirectionKeyDown(player.queued)) held = player.queued;
-    else if (DirectionKeyDown(player.facing)) held = player.facing;
-    else
+    if (controlsOpen)
     {
-        for (Direction direction : {Direction::Left, Direction::Right, Direction::Up, Direction::Down})
-            if (DirectionKeyDown(direction)) { held = direction; break; }
+        Movement::Update(player, level, dt, Direction::None);
+        return;
     }
-    Movement::Update(player, dt, held, pressed);
-}
 
-void DrawMaze(Texture2D dungeon)
-{
-    for (int row = 0; row < Maze::Rows; ++row)
+    Direction direction = PressedDirection();
+    // A fresh press takes over immediately. Keep that direction while it is held.
+    if (direction == Direction::None && DirectionKeyDown(player.facing)) direction = player.facing;
+    if (direction == Direction::None)
     {
-        for (int column = 0; column < Maze::Columns; ++column)
+        for (Direction candidate : {Direction::Left, Direction::Right, Direction::Up, Direction::Down})
         {
-            const bool floor = Maze::IsWalkable(column, row);
-            const Rectangle destination{
-                static_cast<float>(Margin + column * Maze::CellSize),
-                static_cast<float>(MazeTop + row * Maze::CellSize),
-                static_cast<float>(Maze::CellSize), static_cast<float>(Maze::CellSize)};
-            DrawTexturePro(dungeon, floor ? FloorSource : WallSource, destination,
-                           {0, 0}, 0, floor ? Color{170, 180, 195, 255} : WHITE);
-            if (!floor) DrawRectangleLinesEx(destination, 1, Color{81, 72, 62, 255});
+            if (!DirectionKeyDown(candidate)) continue;
+            direction = candidate;
+            break;
         }
     }
+    Movement::Update(player, level, dt, direction);
+}
+
+bool HandleControlsInput(bool& controlsOpen, bool toggle, bool escape)
+{
+    if (escape)
+    {
+        if (!controlsOpen) return false;
+        controlsOpen = false;
+    }
+    else if (toggle) controlsOpen = !controlsOpen;
+    return true;
 }
 
 void DrawPlayer(Texture2D texture, const Player& player)
@@ -106,8 +162,8 @@ void DrawPlayer(Texture2D texture, const Player& player)
     // 2x scale; transparent padding is below the feet. Lift the frame so
     // the visible feet remain inside the occupied floor cell.
     const Rectangle destination{
-        Margin + player.visual.x - Maze::CellSize * 0.5f,
-        MazeTop + player.visual.y - Maze::CellSize * 0.5f - 10, 32, 64};
+        player.position.x - Maze::CellSize * 0.5f,
+        player.position.y - Maze::CellSize * 0.5f - 10, 32, 64};
     const Vector2 offsets[] = {{-2, 0}, {2, 0}, {0, -2}, {0, 2}};
     for (Vector2 offset : offsets)
     {
@@ -118,11 +174,41 @@ void DrawPlayer(Texture2D texture, const Player& player)
     }
     DrawTexturePro(texture, source, destination, {0, 0}, 0, WHITE);
 }
+
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-    InitWindow(ScreenWidth, ScreenHeight, "Maze Runner - Shadow Hunt | Asset Prototype");
+    auto seed = static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count());
+    if (argc != 1)
+    {
+        if (argc != 3 || std::string_view(argv[1]) != "--seed")
+        {
+            std::fputs("Usage: game.exe [--seed 0..4294967295]\n", stderr);
+            return 2;
+        }
+        const std::string_view value = argv[2];
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seed);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+        {
+            std::fputs("Seed must be an integer from 0 to 4294967295.\n", stderr);
+            return 2;
+        }
+    }
+
+    Maze::GeneratedLevel generated;
+    if (!Maze::Generate(seed, generated))
+    {
+        std::fprintf(stderr, "Maze generation failed reachability validation for seed %lu.\n",
+                     static_cast<unsigned long>(seed));
+        return 1;
+    }
+    const Maze::Layout& level = generated.layout;
+    TraceLog(LOG_INFO, "Maze seed: %lu", static_cast<unsigned long>(seed));
+
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    InitWindow(DefaultWindowWidth, DefaultWindowHeight, "Maze Runner - Shadow Hunt");
+    SetExitKey(KEY_NULL);
     SetTargetFPS(60);
     const std::string root = AssetRoot();
     const Texture2D dungeon = LoadTexture((root + "enviroment/mainlevbuild.png").c_str());
@@ -138,8 +224,8 @@ int main()
     }
     SetTextureFilter(dungeon, TEXTURE_FILTER_POINT);
     SetTextureFilter(playerTexture, TEXTURE_FILTER_POINT);
-    Player player;
-    Lighting::DungeonLight light;
+    Player player{Movement::Center(level.spawn)};
+    Lighting::DungeonLight light(level);
     if (!light.Initialize())
     {
         TraceLog(LOG_ERROR, "Could not create dungeon lighting render texture.");
@@ -148,64 +234,58 @@ int main()
         CloseWindow();
         return 1;
     }
-    Candles::State candles;
-    Candles::Renderer candleRenderer;
-    if (!candleRenderer.Load(root))
+    Torches::State torchState(level);
+    Torches::Fixtures torches(torchState);
+    if (!torches.Load(root))
     {
-        TraceLog(LOG_ERROR, "Could not load candleA animation frames.");
+        TraceLog(LOG_ERROR, "Could not load torch animation frames.");
         light.Unload();
         UnloadTexture(playerTexture);
         UnloadTexture(dungeon);
         CloseWindow();
         return 1;
     }
-    const char* candleFeedback = "";
-    float feedbackTime = 0;
+    bool controlsOpen = false;
+    Vector2 cameraCenter{player.position.x, player.position.y};
     while (!WindowShouldClose())
     {
+        if (!HandleControlsInput(controlsOpen, IsKeyPressed(KEY_I), IsKeyPressed(KEY_ESCAPE))) break;
+        // Raylib fits the current monitor and restores the previous window bounds.
+        if (IsKeyPressed(KEY_F11)) ToggleBorderlessWindowed();
+        const Viewport view = MakeViewport(GetScreenWidth(), GetScreenHeight());
+
         const float dt = GetFrameTime();
-        UpdatePlayer(player, dt);
-        candles.Update(dt);
-        feedbackTime = std::max(0.0f, feedbackTime - dt);
-        if (IsKeyPressed(KEY_E))
+        UpdatePlayer(player, level, dt, controlsOpen);
+
+        const Vector2 playerPosition{player.position.x, player.position.y};
+        torches.UpdateAnimation(dt);
+        if (torchState.ActivateNearby(playerPosition))
         {
-            // During a step, 'current' is the last cell center reached.
-            const Candles::PlacementResult result = candles.TryPlace(player.current.column, player.current.row);
-            switch (result)
-            {
-                case Candles::PlacementResult::Placed: candleFeedback = "Candle placed"; break;
-                case Candles::PlacementResult::Duplicate: candleFeedback = "A candle is already here"; break;
-                case Candles::PlacementResult::Empty: candleFeedback = "No candles remaining"; break;
-                case Candles::PlacementResult::InvalidCell: candleFeedback = "Cannot place a candle here"; break;
-            }
-            feedbackTime = 2.0f;
-            if (result == Candles::PlacementResult::Placed)
-            {
-                Lighting::PointLight sources[Candles::StartingInventory];
-                for (int i = 0; i < candles.count; ++i)
-                    sources[i] = {{(candles.placed[i].column + 0.5f) * Maze::CellSize,
-                                   (candles.placed[i].row + 0.5f) * Maze::CellSize},
-                                  Candles::GlowRadiusCells * Maze::CellSize, Lighting::CandleTint};
-                light.SetStaticLights(sources, candles.count);
-            }
+            Lighting::PointLight sources[Maze::MaxTorches];
+            const int count = torches.AppendLights(sources);
+            light.SetStaticLights(sources, count);
         }
-        light.Update({player.visual.x, player.visual.y}, FacingVector(player.facing));
+        light.Update(playerPosition, FacingVector(player.facing));
+
         BeginDrawing();
-        ClearBackground(Color{13, 15, 20, 255});
-        DrawText("MAZE RUNNER - SHADOW HUNT", Margin, 18, 24, Color{232, 211, 165, 255});
-        DrawText("Dungeon asset prototype | Fixed maze", Margin, 49, 16, LIGHTGRAY);
-        DrawText(TextFormat("Candles: %d / %d", candles.Remaining(), Candles::StartingInventory),
-                 ScreenWidth - 170, 49, 16, Color{232, 211, 165, 255});
-        if (feedbackTime > 0) DrawText(candleFeedback, Margin, 66, 12, Color{232, 211, 165, 255});
-        DrawMaze(dungeon);
-        light.DrawDarkness({Margin, MazeTop});
-        candleRenderer.Draw(candles, {Margin, MazeTop});
-        DrawPlayer(playerTexture, player);
-        DrawText("Move: WASD / Arrows     E: Place candle     Esc: Quit",
-                 Margin, ScreenHeight - 30, 16, LIGHTGRAY);
+        ClearBackground(HudBackground);
+        if (view.width > 0 && view.height > 0)
+        {
+            const Camera2D camera = FollowCamera(cameraCenter, playerPosition, view, dt);
+            const Rectangle visible = VisibleDungeon(view, camera);
+            BeginMode2D(camera);
+            DungeonArt::Draw(dungeon, level, visible, Lighting::AmbientMaskColor);
+            torches.DrawBrackets();
+            light.DrawDarkness();
+            torches.DrawFlames();
+            DrawPlayer(playerTexture, player);
+            EndMode2D();
+            Hud::DrawLocation(view.width, view.hudScale, level.LocationName(Movement::CellAt(player.position)));
+            if (controlsOpen) Hud::DrawControls(view.width, view.height, view.hudScale);
+        }
         EndDrawing();
     }
-    candleRenderer.Unload();
+    torches.Unload();
     light.Unload();
     UnloadTexture(playerTexture);
     UnloadTexture(dungeon);
