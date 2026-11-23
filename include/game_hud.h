@@ -42,12 +42,13 @@ inline void DrawControls(int width, int height, float scale)
     struct Row { const char* action; const char* keys; };
     constexpr Row rows[] = {
         {"Move", "WASD / Arrow keys"},
+        {"Exploration map", "M"},
         {"Toggle fullscreen", "F11"},
-        {"Close controls", "I / Esc"},
-        {"Quit with controls closed", "Esc"}
+        {"Toggle controls", "I"},
+        {"Close overlay / quit", "Esc"}
     };
     const int panelWidth = Pixels(scale, 426);
-    const int panelHeight = Pixels(scale, 218);
+    const int panelHeight = Pixels(scale, 240);
     const int x = (width - panelWidth) / 2;
     const int y = (height - panelHeight) / 2;
     const int padding = Pixels(scale, 22);

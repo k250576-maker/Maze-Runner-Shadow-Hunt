@@ -12,3 +12,9 @@
 
 # Laptop-only Mesa launcher.
 /run.ps1
+
+# Optional local audio with unverified redistribution rights.
+/assets/audio/music/*kA7c3SpzZDA*
+/assets/audio/music/deep_dungeon.mp3
+/assets/audio/music/deep_dungeon.ogg
+/assets/audio/sfx/footsteps-use-it-again.mp3

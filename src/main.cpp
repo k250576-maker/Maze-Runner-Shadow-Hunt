@@ -3,6 +3,8 @@
 #include "../include/maze_generation.h"
 #include "../include/dungeon_art.h"
 #include "../include/game_hud.h"
+#include "../include/game_audio.h"
+#include "../include/parchment_map.h"
 #include "../include/player_movement.h"
 #include "../include/lighting.h"
 #include "../include/torches.h"
@@ -141,14 +143,20 @@ void UpdatePlayer(Player& player, const Maze::Layout& level, float dt, bool cont
     Movement::Update(player, level, dt, direction);
 }
 
-bool HandleControlsInput(bool& controlsOpen, bool toggle, bool escape)
+enum class Overlay { None, Controls, Map };
+
+bool HandleOverlayInput(Overlay& overlay, bool controls, bool map, bool escape)
 {
     if (escape)
     {
-        if (!controlsOpen) return false;
-        controlsOpen = false;
+        if (overlay == Overlay::None) return false;
+        overlay = Overlay::None;
     }
-    else if (toggle) controlsOpen = !controlsOpen;
+    else if (controls || map)
+    {
+        const Overlay requested = controls ? Overlay::Controls : Overlay::Map;
+        overlay = overlay == requested ? Overlay::None : requested;
+    }
     return true;
 }
 
@@ -180,14 +188,22 @@ void DrawPlayer(Texture2D texture, const Player& player)
 int main(int argc, char* argv[])
 {
     auto seed = static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count());
-    if (argc != 1)
+    auto soundtrack = GameAudio::DefaultSoundtrack;
+    for (int i = 1; i < argc; i += 2)
     {
-        if (argc != 3 || std::string_view(argv[1]) != "--seed")
+        const std::string_view option = argv[i];
+        if (i + 1 >= argc || (option != "--seed" && option != "--music"))
         {
-            std::fputs("Usage: game.exe [--seed 0..4294967295]\n", stderr);
+            std::fputs("Usage: game.exe [--seed 0..4294967295] [--music dungeon002|dark-cavern|deep-dungeon|off]\n", stderr);
             return 2;
         }
-        const std::string_view value = argv[2];
+        const std::string_view value = argv[i + 1];
+        if (option == "--music")
+        {
+            if (GameAudio::ParseSoundtrack(value, soundtrack)) continue;
+            std::fputs("Music must be dungeon002, dark-cavern, deep-dungeon, or off.\n", stderr);
+            return 2;
+        }
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seed);
         if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
         {
@@ -245,19 +261,27 @@ int main(int argc, char* argv[])
         CloseWindow();
         return 1;
     }
-    bool controlsOpen = false;
+    GameAudio::System audio;
+    audio.Initialize(root, soundtrack);
+    Exploration::Map exploration(level);
+    exploration.Visit(level.spawn);
+    Overlay overlay = Overlay::None;
     Vector2 cameraCenter{player.position.x, player.position.y};
     while (!WindowShouldClose())
     {
-        if (!HandleControlsInput(controlsOpen, IsKeyPressed(KEY_I), IsKeyPressed(KEY_ESCAPE))) break;
+        if (!HandleOverlayInput(overlay, IsKeyPressed(KEY_I), IsKeyPressed(KEY_M), IsKeyPressed(KEY_ESCAPE))) break;
         // Raylib fits the current monitor and restores the previous window bounds.
         if (IsKeyPressed(KEY_F11)) ToggleBorderlessWindowed();
         const Viewport view = MakeViewport(GetScreenWidth(), GetScreenHeight());
 
         const float dt = GetFrameTime();
-        UpdatePlayer(player, level, dt, controlsOpen);
+        const auto previous = player.position;
+        UpdatePlayer(player, level, dt, overlay != Overlay::None);
+        audio.Update(std::abs(player.position.x - previous.x) + std::abs(player.position.y - previous.y));
 
         const Vector2 playerPosition{player.position.x, player.position.y};
+        const auto playerCell = Movement::CellAt(player.position);
+        exploration.Visit(playerCell);
         torches.UpdateAnimation(dt);
         if (torchState.ActivateNearby(playerPosition))
         {
@@ -280,11 +304,15 @@ int main(int argc, char* argv[])
             torches.DrawFlames();
             DrawPlayer(playerTexture, player);
             EndMode2D();
-            Hud::DrawLocation(view.width, view.hudScale, level.LocationName(Movement::CellAt(player.position)));
-            if (controlsOpen) Hud::DrawControls(view.width, view.height, view.hudScale);
+            Hud::DrawLocation(view.width, view.hudScale, level.LocationName(playerCell));
+            if (overlay == Overlay::Controls) Hud::DrawControls(view.width, view.height, view.hudScale);
+            else if (overlay == Overlay::Map)
+                Parchment::DrawExpanded(exploration, playerPosition, view.width, view.height, view.hudScale);
+            else Parchment::DrawCompact(exploration, playerPosition, playerCell, view.hudScale);
         }
         EndDrawing();
     }
+    audio.Shutdown();
     torches.Unload();
     light.Unload();
     UnloadTexture(playerTexture);
