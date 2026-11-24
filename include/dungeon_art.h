@@ -69,7 +69,7 @@ inline void DrawRunner(Runner runner)
 
     const int centerX = x + width / 2;
     const int centerY = y + height / 2;
-    const auto drawMotif = [centerY](int motifX) {
+    const auto drawMotif = [centerY, pattern](int motifX) {
         DrawRectangle(motifX - 4, centerY - 2, 8, 4, pattern);
         DrawRectangle(motifX - 2, centerY - 4, 4, 8, pattern);
     };

@@ -24,12 +24,12 @@
                                     "isDefault":  true
                                 },
                       "type":  "process",
-                      "command":  "C:/msys64/ucrt64/bin/g++.exe",
+                      "command":  "C:/mingw64/bin/g++.exe",
                       "label":  "Build",
                       "options":  {
                                       "cwd":  "${workspaceFolder}",
                                       "env":  {
-                                                  "PATH":  "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+                                                  "PATH":  "C:\\mingw64\\bin;${env:PATH}"
                                               }
                                   },
                       "args":  [
@@ -39,9 +39,13 @@
                                    "-Wextra",
                                    "-I",
                                    "${workspaceFolder}/include",
+                                   "-I",
+                                   "C:/mingw64/include",
                                    "${workspaceFolder}/src/main.cpp",
                                    "-o",
                                    "${workspaceFolder}/build/game.exe",
+                                   "-L",
+                                   "C:/mingw64/lib",
                                    "-lraylib",
                                    "-lopengl32",
                                    "-lgdi32",
@@ -64,7 +68,7 @@
                       "options":  {
                                       "cwd":  "${workspaceFolder}",
                                       "env":  {
-                                                  "PATH":  "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+                                                  "PATH":  "C:\\mingw64\\bin;${env:PATH}"
                                               }
                                   }
                   },
