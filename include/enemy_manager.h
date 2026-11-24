@@ -103,7 +103,7 @@ public:
     const Enemy& Angel() const { return angel; }
     const Enemy& Ghost() const { return ghost; }
 
-    void Update(float dt, Vector2 previous, Vector2 player, const Lighting::DungeonLight& light, Health& health)
+    void Update(float dt, Vector2 previous, Vector2 player, const Lighting::DungeonLight& light, Health& health,bool hidden=false)
     {
         const bool changed = barrier.Refresh(torches);
         if (changed)
@@ -130,9 +130,9 @@ public:
             e.traveled = 0;
             e.attackPulse = std::max(0.0f, e.attackPulse - dt);
             const Vector2 before = e.position;
-            Tick(e, dt, player, moving, light);
+            Tick(e, dt, player, moving, light,hidden);
             const float contact = ContactFraction(previous, player, before, e);
-            const bool armed = e.discovered && e.state == State::Chasing && !Safe(player)
+            const bool armed = (e.discovered || (hidden && e.kind==Kind::Ghost)) && !(hidden && e.kind==Kind::Angel) && e.state == State::Chasing && !Safe(player)
                 && Maze::HasLineOfSight(level, e.position, player)
                 && DistanceSquared(e.position, player) <= (e.kind == Kind::Angel ? CloseSense * CloseSense : 28.0f * 28.0f);
             if (!armed || (e.kind == Kind::Ghost && health.invulnerable > 0))
@@ -151,6 +151,7 @@ public:
         }
     }
 
+    void InvalidateRoutes(){barrier.Invalidate();angel.lastGoal=ghost.lastGoal=NoCell;}
 private:
     void SetHome(Enemy& e, int id)
     {
@@ -216,14 +217,14 @@ private:
         }
     }
 
-    void Tick(Enemy& e, float dt, Vector2 player, bool moving, const Lighting::DungeonLight& light)
+    void Tick(Enemy& e, float dt, Vector2 player, bool moving, const Lighting::DungeonLight& light,bool hidden)
     {
         ++e.updates;
         const bool isAngel = e.kind == Kind::Angel;
         const bool sight = Maze::HasLineOfSight(level, e.position, player);
         const float distance = DistanceSquared(e.position, player);
         const bool withinLeash = DistanceSquared(player, e.home) <= LeashRadius * LeashRadius;
-        const bool senses = isAngel ? sight : (moving || sight || distance < CloseSense * CloseSense);
+        const bool senses = isAngel ? (sight && !hidden) : (moving || sight || distance < CloseSense * CloseSense);
         const bool safe = Safe(player);
         e.nearby = !safe && withinLeash && distance <= DetectionRadius * DetectionRadius;
         const bool detected = !safe && withinLeash && distance <= DetectionRadius * DetectionRadius && senses;

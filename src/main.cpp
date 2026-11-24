@@ -9,6 +9,12 @@
 #include "../include/game_audio.h"
 #include "../include/game_over.h"
 #include "../include/main_menu.h"
+#include "../include/pause_menu.h"
+#include "../include/escape_objective.h"
+#include "../include/victory_screen.h"
+#include "../include/dungeon_exploration.h"
+#include "../include/exploration_art.h"
+#include "../include/audio_settings_ui.h"
 #include "../include/parchment_map.h"
 #include "../include/player_movement.h"
 #include "../include/run_progress.h"
@@ -33,6 +39,7 @@ constexpr float MaxVisibleWorldSpan = 20.0f * Maze::CellSize;
 constexpr Color HudBackground{13, 15, 20, 255};
 constexpr int FrameWidth  = 16;
 constexpr int FrameHeight = 32;
+constexpr float PlayerVisualScale = 0.80f; // Multiplies the existing 2x sprite scale.
 
 using Movement::Direction;
 using Movement::Player;
@@ -126,7 +133,30 @@ std::string AssetRoot()
     return std::string(GetApplicationDirectory()) + "../assets/";
 }
 
-enum class GameOverlay { None, Controls, Map, Book };
+enum class GameOverlay { None, Controls, Map, Book, Pause, Settings };
+
+void DrawInteractionPrompt(const char* prompt,const Viewport& view)
+{
+    if(!prompt || !*prompt)return;
+    const int size=std::clamp(Hud::Pixels(view.hudScale,22),18,30);
+    const int available=std::max(60,view.width-48);
+    std::string first=prompt,second;
+    if(MeasureText(prompt,size)>available)
+    {
+        auto split=first.find_last_of(' ');
+        while(split!=std::string::npos && MeasureText(first.substr(0,split).c_str(),size)>available)
+            split=split==0?std::string::npos:first.find_last_of(' ',split-1);
+        if(split!=std::string::npos){second=first.substr(split+1);first.resize(split);}
+    }
+    const int lines=second.empty()?1:2;
+    const int width=std::min(view.width-24,std::max(MeasureText(first.c_str(),size),MeasureText(second.c_str(),size))+28);
+    const int height=lines*(size+6)+16;
+    const Rectangle panel{(view.width-width)/2.0f,static_cast<float>(view.height-100-height),static_cast<float>(width),static_cast<float>(height)};
+    DrawRectangleRounded(panel,0.18f,5,{12,10,15,235});
+    DrawRectangleRoundedLines(panel,0.18f,5,Hud::Brass);
+    Hud::DrawCenteredText(first.c_str(),view.width/2,static_cast<int>(panel.y)+8,size,Hud::Gold);
+    if(!second.empty())Hud::DrawCenteredText(second.c_str(),view.width/2,static_cast<int>(panel.y)+14+size,size,Hud::Gold);
+}
 
 void DrawMelee(const Maze::Layout& level, Vector2 player, const Enemies::Melee& attack)
 {
@@ -189,15 +219,21 @@ void DrawPlayer(Texture2D texture, const Player& player, Color tint)
                      static_cast<float>(FrameWidth),
                      static_cast<float>(FrameHeight)};
     if (player.facing == Direction::Right) source.width = -source.width;
+    const float pixelScale=2.0f*PlayerVisualScale;
+    // Neutral frames end at source row 19, with transparent padding below.
+    // Retain the old foot anchor (world Y + 12) when changing visual size.
+    constexpr float feetRow=19.0f;
+    constexpr float groundOffset=12.0f;
     const Rectangle destination{
-        player.position.x - Maze::CellSize * 0.5f,
-        player.position.y - Maze::CellSize * 0.5f - 10, 32, 64};
+        player.position.x - FrameWidth*pixelScale*0.5f,
+        player.position.y + groundOffset - feetRow*pixelScale,
+        FrameWidth*pixelScale,FrameHeight*pixelScale};
     const Vector2 offsets[] = {{-2, 0}, {2, 0}, {0, -2}, {0, 2}};
     for (Vector2 offset : offsets)
     {
         Rectangle edge = destination;
-        edge.x += offset.x;
-        edge.y += offset.y;
+        edge.x += offset.x*PlayerVisualScale;
+        edge.y += offset.y*PlayerVisualScale;
         DrawTexturePro(texture, source, edge, {0, 0}, 0, Color{235, 198, 118, 190});
     }
     DrawTexturePro(texture, source, destination, {0, 0}, 0, tint);
@@ -219,9 +255,15 @@ struct PlaySession
     Enemies::Health        health;
     Run::Clock             clock;
     Run::Souls             souls;
+    Escape::Objective      escape;
+    Dungeon::Exploration   dungeon;
+    unsigned               defeated=0;
+    int                    victoryChoice=0;
     float                  shownHealth = 1;
     Enemies::Melee         melee;
     GameOverlay            overlay    = GameOverlay::None;
+    PauseMenu::State        pauseMenu;
+    bool                   controlsFromPause = false;
     GameOver::Choice       deathChoice = GameOver::Choice::Restart;
     int                    bookLeaf = 0;
     float                  enemyAnimation = 0;
@@ -241,6 +283,8 @@ struct PlaySession
         , enemies(generated.layout, torchState)
         , physical(generated.layout)
         , bats(generated.layout)
+        , escape(generated.layout)
+        , dungeon(generated.layout)
     {}
 
     PlaySession(const PlaySession&) = delete;
@@ -248,14 +292,27 @@ struct PlaySession
 
     bool Initialize(const std::string& assetRoot)
     {
+        if (!escape.Initialize()) return false;
+        if (!dungeon.Initialize(generatedSeed)) return false;
+        escape.SetUnlocked(false);
         if (!enemies.Spawn())       return false;
         if (!light.Initialize())    return false;
         if (!torches.Load(assetRoot)) { light.Unload(); return false; }
         player        = {Movement::Center(generated.layout.spawn)};
         cameraCenter  = {player.position.x, player.position.y};
         exploration.Visit(generated.layout.spawn);
+        RefreshLights();
         resourcesReady = true;
         return true;
+    }
+    unsigned generatedSeed=0;
+
+    void RefreshLights()
+    {
+        Lighting::PointLight sources[Maze::MaxTorches+1];
+        int count=torches.AppendLights(sources);
+        sources[count++]=escape.Light();
+        light.SetStaticLights(sources,count);
     }
 
     ~PlaySession()
@@ -275,6 +332,7 @@ std::unique_ptr<PlaySession> StartSession(const std::string& root, std::uint32_t
                  static_cast<unsigned long>(seed));
         return {};
     }
+    session->generatedSeed=seed;
     if (!session->Initialize(root))
     {
         TraceLog(LOG_ERROR, "Could not initialize game session resources.");
@@ -354,13 +412,31 @@ int main(int argc, char* argv[])
     }
     Bats::Art batArt;
     batArt.Load(root);
+    Dungeon::Art explorationArt;explorationArt.Load(root);
     Mobcyclopedia::Type bookType;
     bookType.Load();
     MenuBackdrop::Castle menuBackdrop;
     menuBackdrop.LoadTorches(root);
 
     GameAudio::System audio;
+    // AssetRoot may be relative to the workspace or absolute beside build/.
+    const std::string localSettingsPath=std::string(GetApplicationDirectory())+"../settings.cfg";
+    auto audioPreferences=AudioPreferences::Load(localSettingsPath);
+    AudioSettings::State audioPanel;
+    audio.ApplySettings(audioPreferences);
     audio.Initialize(root, soundtrack);
+    const auto settingsInput=[&]()
+    {
+        const auto result=AudioSettings::Input(audioPanel,audioPreferences);
+        if(result.changed)audio.ApplySettings(audioPreferences);
+        if(result.save)
+        {
+            audioPanel.saveFailed=!AudioPreferences::Save(localSettingsPath,audioPreferences);
+            audioPanel.dirty=audioPanel.saveFailed;
+            if(audioPanel.saveFailed)TraceLog(LOG_WARNING,"Could not save audio settings: %s",localSettingsPath.c_str());
+        }
+        return result.closed;
+    };
 
     // ------------------------------------------------------------------ //
     //  Application state machine: Menu ↔ Playing                         //
@@ -374,6 +450,8 @@ int main(int argc, char* argv[])
         BeginDrawing();
         if (view.width > 0 && view.height > 0)
             MainMenu::Draw(view.width, view.height, menuState, menuBackdrop, dungeonTex, playerTex, enemySprites, bookType);
+        if(menuState.overlay==MainMenu::Overlay::Settings)
+            AudioSettings::Draw(audioPanel,audioPreferences,view.width,view.height);
         EndDrawing();
     };
     const auto returnToMenu = [&](const Viewport& view) {
@@ -382,14 +460,18 @@ int main(int argc, char* argv[])
             seed = static_cast<std::uint32_t>(
                 std::chrono::system_clock::now().time_since_epoch().count());
         audio.TransitionToMenu();
+        audio.SetPaused(false);
+        UI::ScreenChanged();
         appState = AppState::Menu;
         menuState = {};
         // EndDrawing polls input so the confirmation key is consumed before the menu accepts keys.
         drawMenuFrame(view);
     };
 
-    while (!WindowShouldClose())
+    bool quitRequested=false;
+    while (!WindowShouldClose() && !quitRequested)
     {
+        UI::BeginFrame();
         if (IsKeyPressed(KEY_F11)) ToggleBorderlessWindowed();
         const Viewport view = MakeViewport(GetScreenWidth(), GetScreenHeight());
         const float dt      = GetFrameTime();
@@ -398,6 +480,11 @@ int main(int argc, char* argv[])
         if (appState == AppState::Menu)
         {
             menuState.time += dt;
+            if(menuState.overlay==MainMenu::Overlay::Settings)
+            {
+                if(settingsInput())menuState.overlay=MainMenu::Overlay::None;
+                drawMenuFrame(view);continue;
+            }
             MainMenu::Item confirmed{};
             if (MainMenu::HandleInput(menuState, confirmed))
             {
@@ -411,6 +498,8 @@ int main(int argc, char* argv[])
                     if (session)
                     {
                         audio.TransitionToGame(seed);
+                        audio.SetPaused(false);
+                        UI::ScreenChanged();
                         appState = AppState::Playing;
                     }
                 }
@@ -425,7 +514,28 @@ int main(int argc, char* argv[])
         if (IsKeyPressed(KEY_F3)) session->debugAI = !session->debugAI;
 #endif
         const bool wasOverlayOpen = session->overlay != GameOverlay::None;
-        if (session->health.Dead())
+        if(session->escape.Completed())
+        {
+            const auto action=Victory::Input(session->victoryChoice);
+            if(action==Victory::Action::Menu) { returnToMenu(view); continue; }
+            if(action==Victory::Action::Quit) { quitRequested=true; continue; }
+            if(action==Victory::Action::SameSeed || action==Victory::Action::NewMaze)
+            {
+                auto nextSeed=session->clock.seed;
+                if(action==Victory::Action::NewMaze)
+                {
+                    nextSeed=static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count());
+                    if(nextSeed==session->clock.seed) ++nextSeed;
+                }
+                if(auto restarted=StartSession(root,nextSeed))
+                {
+                    seed=nextSeed; session=std::move(restarted);
+                    audio.SetPaused(false); audio.TransitionToGame(seed); UI::ScreenChanged();
+                }
+                continue;
+            }
+        }
+        else if (session->health.Dead())
         {
             session->health.Update(dt);
             if (session->health.flash == 0 && GameOver::Confirm(session->deathChoice))
@@ -438,24 +548,60 @@ int main(int argc, char* argv[])
                 if (auto restarted = StartSession(root, seed))
                 {
                     session = std::move(restarted);
+                    audio.SetPaused(false);
                     audio.TransitionToGame(seed);
+                    UI::ScreenChanged();
                 }
+                continue;
             }
+        }
+        else if(session->overlay==GameOverlay::Pause)
+        {
+            const auto action=PauseMenu::Input(session->pauseMenu);
+            if(action==PauseMenu::Action::Resume) session->overlay=GameOverlay::None;
+            else if(action==PauseMenu::Action::Controls) { session->overlay=GameOverlay::Controls; session->controlsFromPause=true; }
+            else if(action==PauseMenu::Action::Settings)session->overlay=GameOverlay::Settings;
+            else if(action==PauseMenu::Action::Menu) { returnToMenu(view); continue; }
+            else if(action==PauseMenu::Action::Quit) { quitRequested=true; continue; }
+            else if(action==PauseMenu::Action::Restart)
+            {
+                if(auto restarted=StartSession(root,session->clock.seed))
+                {
+                    session=std::move(restarted); audio.SetPaused(false); audio.TransitionToGame(session->clock.seed);
+                    UI::ScreenChanged();
+                }
+                continue;
+            }
+        }
+        else if(session->overlay==GameOverlay::Settings)
+        {
+            if(settingsInput())session->overlay=GameOverlay::Pause;
         }
         else if (IsKeyPressed(KEY_ESCAPE))
         {
             if (session->overlay != GameOverlay::None)
             {
-                session->overlay = GameOverlay::None;
+                session->overlay = session->controlsFromPause && session->overlay==GameOverlay::Controls
+                    ? GameOverlay::Pause : GameOverlay::None;
+                session->controlsFromPause=false;
             }
             else
             {
-                returnToMenu(view);
-                continue;
+                session->overlay=GameOverlay::Pause;
             }
+            UI::ScreenChanged();
         }
-
-        else if (IsKeyPressed(KEY_B))
+        else if(session->overlay==GameOverlay::Controls &&
+                (IsKeyPressed(KEY_I) || UI::ConfirmKey() || UI::BackPressed()))
+        {
+            session->overlay=session->controlsFromPause?GameOverlay::Pause:GameOverlay::None;
+            session->controlsFromPause=false; UI::ScreenChanged();
+        }
+        else if(session->overlay==GameOverlay::Book && Mobcyclopedia::ClosePressed())
+        { session->overlay=GameOverlay::None; UI::ScreenChanged(); }
+        else if(session->overlay==GameOverlay::Map && UI::BackPressed())
+        { session->overlay=GameOverlay::None; UI::ScreenChanged(); }
+        else if (IsKeyPressed(KEY_B) && !session->controlsFromPause)
         {
             session->bookLeaf = 0;
             session->overlay = session->overlay == GameOverlay::Book ? GameOverlay::None : GameOverlay::Book;
@@ -465,20 +611,21 @@ int main(int argc, char* argv[])
             session->overlay = (session->overlay == GameOverlay::Controls)
                                ? GameOverlay::None : GameOverlay::Controls;
         }
-        else if (session->overlay != GameOverlay::Book && IsKeyPressed(KEY_M))
+        else if (session->overlay != GameOverlay::Book && !session->controlsFromPause && IsKeyPressed(KEY_M))
         {
             session->overlay = (session->overlay == GameOverlay::Map)
                                ? GameOverlay::None : GameOverlay::Map;
         }
 
-        if (session->overlay == GameOverlay::Book) Mobcyclopedia::Navigate(session->bookLeaf);
+        if (!session->escape.Completed() && session->overlay == GameOverlay::Book) Mobcyclopedia::Navigate(session->bookLeaf);
         const Maze::Layout& level = session->generated.layout;
-        const bool overlayOpen = session->health.Dead() || session->overlay != GameOverlay::None || IsWindowMinimized();
+        const bool overlayOpen = session->health.Dead() || session->escape.Completed() || session->overlay != GameOverlay::None || IsWindowMinimized() || wasOverlayOpen;
+        audio.SetPaused(overlayOpen);
         session->clock.Update(dt, overlayOpen);
 
         // Player movement — blocked while an overlay is open.
         const auto previous = session->player.position;
-        if (!overlayOpen)
+        if (!overlayOpen && !session->dungeon.hidden)
         {
             Direction direction = PressedDirection();
             if (direction == Direction::None && DirectionKeyDown(session->player.facing))
@@ -495,26 +642,56 @@ int main(int argc, char* argv[])
             }
             Movement::Update(session->player, level, dt, direction);
         }
-        else
-        {
-            Movement::Update(session->player, level, dt, Direction::None);
-        }
 
         const float moved = std::abs(session->player.position.x - previous.x)
                           + std::abs(session->player.position.y - previous.y);
 
         const Vector2 playerPos{session->player.position.x, session->player.position.y};
         const auto    playerCell = Movement::CellAt(session->player.position);
-        session->exploration.Visit(playerCell);
-        session->torches.UpdateAnimation(dt);
-        if (session->torchState.ActivateNearby(playerPos))
+        if(!overlayOpen)
         {
-            Lighting::PointLight sources[Maze::MaxTorches];
-            const int count = session->torches.AppendLights(sources);
-            session->light.SetStaticLights(sources, count);
+            auto& exploration=session->dungeon;
+            exploration.Update(dt);
+            if(!exploration.hidden)
+            {
+                const auto oldGold=exploration.gold;
+                const bool collected=exploration.Collect(playerPos);
+                if(exploration.gold>oldGold)audio.CollectGold();
+                else if(collected)audio.CollectSoul();
+            }
+            if(IsKeyPressed(KEY_E))
+            {
+                if(exploration.hidden)
+                {
+                    bool clear=true;
+                    for(const auto* enemy:{&session->enemies.Angel(),&session->enemies.Ghost()})
+                        if(Enemies::DistanceSquared(enemy->position,playerPos)<36*36)clear=false;
+                    for(const auto& actor:session->physical.Actors())
+                        if(actor.active&&actor.health>0&&Enemies::DistanceSquared(actor.body.position,playerPos)<36*36)clear=false;
+                    if(clear){exploration.hidden=false;exploration.hidingBarrel=-1;}
+                }
+                else
+                {
+                    const auto action=exploration.Nearest(playerPos);
+                    if(exploration.Activate(action))
+                    {
+                        if(action.kind==Dungeon::Kind::Chest)audio.OpenChest();else audio.CollectSoul();
+                        session->escape.SetUnlocked(exploration.exitOpen);
+                        if(action.kind==Dungeon::Kind::Door||action.kind==Dungeon::Kind::Exit)
+                        {session->physical.InvalidateRoutes();session->enemies.InvalidateRoutes();session->RefreshLights();}
+                    }
+                }
+            }
+        }
+        session->light.SetObserverEnabled(!session->dungeon.hidden);
+        if(!overlayOpen) session->exploration.Visit(playerCell);
+        if(!overlayOpen) session->torches.UpdateAnimation(dt);
+        if (!overlayOpen && session->torchState.ActivateNearby(playerPos))
+        {
+            session->RefreshLights();
         }
         session->light.Update(playerPos, FacingVector(session->player.facing));
-        const Camera2D camera = FollowCamera(session->cameraCenter, playerPos, view, dt);
+        const Camera2D camera = FollowCamera(session->cameraCenter, playerPos, view, overlayOpen?0:dt);
         const Rectangle visible = VisibleDungeon(view, camera);
         GameAudio::EnemyAudio cues;
         bool quiet = false;
@@ -522,12 +699,12 @@ int main(int argc, char* argv[])
         {
             session->bats.Update(dt, playerPos);
             const Vector2 facing = FacingVector(session->player.facing);
-            const bool swing = session->melee.Update(dt, !wasOverlayOpen && IsKeyPressed(KEY_SPACE), facing);
+            const bool swing = session->melee.Update(dt, !session->dungeon.hidden && !wasOverlayOpen && !UI::keysBlocked && IsKeyPressed(KEY_SPACE), facing);
             session->enemyAnimation = std::fmod(session->enemyAnimation + dt, 1.0f);
             const int previousHealth = session->health.points;
-            session->enemies.Update(dt, {previous.x, previous.y}, playerPos, session->light, session->health);
+            session->enemies.Update(dt, {previous.x, previous.y}, playerPos, session->light, session->health,session->dungeon.hidden);
             session->physical.Update(dt, playerPos, visible, session->light, session->exploration,
-                                     swing, facing, session->health);
+                                     swing, facing, session->health,session->dungeon.hidden);
             const auto distanceTo = [&](const Enemies::Enemy& enemy) {
                 return std::sqrt(Enemies::DistanceSquared(playerPos, enemy.position));
             };
@@ -545,18 +722,31 @@ int main(int argc, char* argv[])
                 if (actor.struck)
                 {
                     cues.Action(actor.health > 0 ? GameAudio::Cue::EnemyHit : GameAudio::Cue::EnemyDeath, distance);
-                    if (actor.health == 0) session->souls.Drop(actor.body.kind, actor.body.position, session->clock.elapsed);
+                    if (actor.health == 0)
+                    {
+                        ++session->defeated;
+                        session->souls.Drop(actor.body.kind, actor.body.position, session->clock.elapsed);
+                        session->dungeon.Drop(actor.body.kind,actor.body.position);
+                    }
                 }
             }
             if (!session->health.Dead() && session->souls.Collect(level, playerPos, session->clock.elapsed)) audio.CollectSoul();
             if (session->health.points < previousHealth) audio.Damage(session->health.lastHit);
+            if(session->dungeon.hidden && (ghost.state==Enemies::State::Chasing || ghost.windup>0 || session->health.points<previousHealth))session->dungeon.WarnGhost();
             quiet = !session->health.Dead() && session->melee.cooldown == 0
                 && session->health.flash == 0 && !session->physical.Dangerous()
                 && angel.state != Enemies::State::Chasing && ghost.state != Enemies::State::Chasing;
+            // Resolve damage first: a dead player cannot win in the same update.
+            if(session->escape.TryComplete({previous.x,previous.y},playerPos,!session->health.Dead(),
+                {session->clock.seed,session->clock.elapsed,session->souls.Total(),session->health.points,session->defeated,session->dungeon.gold}))
+            {
+                UI::ScreenChanged(); audio.SetPaused(true); audio.PlayVictory();
+            }
         }
 
         const float actualHealth = float(session->health.points) / Enemies::StartingHealth;
-        session->shownHealth = std::max(actualHealth, session->shownHealth - dt * 1.8f);
+        if(!overlayOpen) session->shownHealth = std::max(actualHealth, session->shownHealth - dt * 1.8f);
+        audio.SetPaused(overlayOpen || session->escape.Completed());
         audio.Update(moved, quiet, cues);
         BeginDrawing();
         ClearBackground(HudBackground);
@@ -564,6 +754,8 @@ int main(int argc, char* argv[])
         {
             BeginMode2D(camera);
             DungeonArt::Draw(dungeonTex, level, visible, Lighting::AmbientMaskColor);
+            session->escape.Draw(dungeonTex,session->clock.elapsed);
+            explorationArt.Draw(session->dungeon,visible);
             for (const auto* e : {&session->enemies.Angel(), &session->enemies.Ghost()})
             {
                 if (!e->discovered || !CheckCollisionPointRec(e->position, visible)
@@ -579,6 +771,7 @@ int main(int argc, char* argv[])
             batArt.Draw(session->bats, level, playerPos, visible);
             session->torches.DrawBrackets();
             session->light.DrawDarkness();
+            session->escape.DrawLabel(playerPos);
             DrawSouls(session->souls, visible, playerPos, level, session->clock.elapsed);
             const auto& ghostActor = session->enemies.Ghost();
             if (ghostActor.discovered && CheckCollisionPointRec(ghostActor.position, visible)
@@ -589,8 +782,8 @@ int main(int argc, char* argv[])
             const float recoil = session->health.invulnerable / Enemies::HitCooldown;
             Color tint = session->health.flash > 0 ? Color{255, 124, 111, 255} : WHITE;
             if (recoil > 0) tint.a = static_cast<unsigned char>(232 + 22 * std::cos(recoil * 12));
-            DrawPlayer(playerTex, session->player, tint);
-            if (!overlayOpen) DrawMelee(level, playerPos, session->melee);
+            if(!session->dungeon.hidden)DrawPlayer(playerTex, session->player, tint);
+            if (!overlayOpen && !session->dungeon.hidden && !session->escape.Completed()) DrawMelee(level, playerPos, session->melee);
             EndMode2D();
             const auto& angel = session->enemies.Angel();
             const auto& ghost = session->enemies.Ghost();
@@ -602,7 +795,7 @@ int main(int argc, char* argv[])
                 if (actor.active && actor.body.state == Enemies::State::WindingUp
                     && Maze::HasLineOfSight(level, playerPos, actor.body.position))
                 {
-                    status = actor.body.kind == Enemies::Kind::Sentinel ? "Sentinel raising its sword" : "Stalker about to lunge";
+                    status = actor.body.kind == Enemies::Kind::Sentinel ? "Wizard charging a spell" : "Demon about to lunge";
                     sanctuary = false;
                 }
             }
@@ -616,22 +809,46 @@ int main(int argc, char* argv[])
                             Enemies::StartingHealth, session->shownHealth);
             char time[24];
             session->clock.Format(time);
-            Hud::DrawRun(view.width, view.height, view.hudScale, Hud::Pixels(view.hudScale, 220), time, session->souls.Total());
+            Hud::DrawRun(view.width, view.height, view.hudScale, Hud::Pixels(view.hudScale, 220), time, session->souls.Total(),session->dungeon.gold);
+            if(!overlayOpen)
+            {
+                const char* prompt=session->dungeon.hidden?"Press E to Exit":session->dungeon.Prompt(session->dungeon.Nearest(playerPos));
+                DrawInteractionPrompt(prompt,view);
+                Hud::DrawCenteredText(TextFormat("Keys: Bronze %s  Silver %s  Escape %s | Exit %s",session->dungeon.HasKey(0)?"yes":"-",session->dungeon.HasKey(1)?"yes":"-",session->dungeon.HasKey(2)?"yes":"-",session->dungeon.exitOpen?"open":"locked"),view.width/2,view.height-73,12,Hud::DimText);
+                if(session->dungeon.ghostWarning>0)Hud::DrawCenteredText("YOU CANNOT HIDE FROM GHOSTS!",view.width/2,view.height/2-40,20,Fade(RED,std::min(1.0f,session->dungeon.ghostWarning)));
+                if(session->dungeon.pickupFlash>0)
+                {
+                    const char* names[]={"Bronze Key","Silver Key","Escape Key"};
+                    Hud::DrawCenteredText(TextFormat("Picked up %s",names[session->dungeon.lastKey]),view.width/2,view.height/2+30,18,Fade(Hud::Gold,std::min(1.0f,session->dungeon.pickupFlash)));
+                }
+            }
             Hud::DrawHitFlash(view.width, view.height, session->health.flash / Enemies::HitFlash,
                               session->health.Dead() && session->health.lastHit == Enemies::Kind::Angel);
-            if (session->health.Dead() && session->health.flash == 0)
-                GameOver::Draw(view.width, view.height, session->deathChoice, session->health.lastHit, session->clock, session->souls.Total());
+            if(session->escape.Completed())
+                Victory::Draw(session->escape.FinalResult(),session->victoryChoice,view.width,view.height);
+            else if (session->health.Dead() && session->health.flash == 0)
+                GameOver::Draw(view.width, view.height, session->deathChoice, session->health.lastHit, session->clock, session->souls.Total(),session->dungeon.gold);
             else if (session->overlay == GameOverlay::Controls)
+            {
                 Hud::DrawControls(view.width, view.height, "Press Esc or I to close this panel");
+                UI::DrawBack(view.width,view.height);
+            }
+            else if(session->overlay==GameOverlay::Pause)
+                PauseMenu::Draw(session->pauseMenu,view.width,view.height);
+            else if(session->overlay==GameOverlay::Settings)
+                AudioSettings::Draw(audioPanel,audioPreferences,view.width,view.height);
             else if (session->overlay == GameOverlay::Map)
+            {
                 Parchment::DrawExpanded(session->exploration, playerPos,
-                                        view.width, view.height, view.hudScale);
+                                        view.width, view.height, view.hudScale,level,session->dungeon.exitOpen);
+                UI::DrawBack(view.width,view.height);
+            }
             else if (session->overlay == GameOverlay::Book)
                 Mobcyclopedia::Draw(view.width, view.height, enemySprites, bookType, session->bookLeaf, static_cast<float>(GetTime()));
             else
             {
                 Parchment::DrawCompact(session->exploration, playerPos,
-                                       playerCell, view.hudScale);
+                                       playerCell, view.hudScale,level);
 #ifndef NDEBUG
                 if (session->debugAI) Enemies::DrawDebug(view.width, view.height, session->enemies, session->physical);
 #endif
@@ -642,10 +859,12 @@ int main(int argc, char* argv[])
 
     // ---- Cleanup ---- //
     session.reset();
+    if(audioPanel.dirty)AudioPreferences::Save(localSettingsPath,audioPreferences);
     audio.Shutdown();
     menuBackdrop.UnloadTorches();
     bookType.Unload();
     batArt.Unload();
+    explorationArt.Unload();
     enemySprites.Unload();
     UnloadTexture(playerTex);
     UnloadTexture(dungeonTex);

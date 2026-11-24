@@ -109,10 +109,10 @@ inline void DrawHealth(int width, int height, float scale, int points, int capac
     DrawRectangleLines(left,top,barWidth,barHeight,{119,70,61,220});
 }
 
-inline void DrawRun(int width, int height, float scale, int rightInset, const char* time, unsigned long long souls)
+inline void DrawRun(int width, int height, float scale, int rightInset, const char* time, unsigned long long souls,unsigned long long gold=0)
 {
     const int size = Pixels(scale, 14), pad = Pixels(scale, 8);
-    const char* label = TextFormat("%s    Souls %llu", time, souls);
+    const char* label = TextFormat("%s  Souls %llu  Gold %llu  Score %llu", time, souls,gold,souls+gold);
     const int w = MeasureText(label,size) + pad*2 + size;
     const float x = float(width - rightInset - w);
     const float y = float(height - (size+pad*2) - pad*2);
@@ -128,11 +128,12 @@ inline void DrawControls(int width, int height, const char* footer)
     constexpr Row rows[] = {
         {"Move", "WASD / Arrow keys"},
         {"Facing melee attack", "Space"},
+        {"Interact / hide / emerge", "E"},
         {"Exploration map", "M"},
         {"Mobcyclopedia", "B"},
         {"Toggle fullscreen", "F11"},
         {"Toggle controls", "I"},
-        {"Close overlay / return to menu", "Esc"}
+        {"Close overlay / pause", "Esc"}
     };
     constexpr int panelWidth = 466;
     constexpr int padding = 26;

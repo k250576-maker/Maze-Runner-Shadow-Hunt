@@ -4,30 +4,38 @@
 #include "game_hud.h"
 #include "enemy.h"
 #include "run_progress.h"
+#include "ui_interaction.h"
 
 namespace GameOver
 {
 enum class Choice { Restart, Menu };
+inline Camera2D Layout(int width,int height)
+{
+    const float scale=std::min(width/460.0f,height/430.0f);
+    return {{(width-360*scale)/2,(height-276*scale)/2},{0,0},0,scale};
+}
+inline Rectangle Button(int i) { return {34,146.0f+i*47,292,39}; }
 
 inline bool Confirm(Choice& selected)
 {
-    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_W) || IsKeyPressed(KEY_S))
-        selected = selected == Choice::Restart ? Choice::Menu : Choice::Restart;
     if (IsKeyPressed(KEY_ESCAPE))
     {
         selected = Choice::Menu;
         return true;
     }
-    return IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
+    int index=static_cast<int>(selected);
+    const bool activate=UI::Select(index,2,Button,Layout(GetScreenWidth(),GetScreenHeight()));
+    selected=static_cast<Choice>(index);
+    return activate;
 }
 
-inline void Draw(int width, int height, Choice choice, Enemies::Kind killer, const Run::Clock& clock, Run::Score souls)
+inline void Draw(int width, int height, Choice choice, Enemies::Kind killer, const Run::Clock& clock, Run::Score souls,Run::Score gold=0)
 {
     constexpr int panelWidth = 360;
     constexpr int panelHeight = 276;
-    const float scale = std::min(width / 460.0f, height / 430.0f);
     DrawRectangle(0, 0, width, height, {9, 6, 11, 190});
-    BeginMode2D({{(width - panelWidth * scale) / 2, (height - panelHeight * scale) / 2}, {0, 0}, 0, scale});
+    const Camera2D layout=Layout(width,height);
+    BeginMode2D(layout);
     Hud::DrawStonePanel({0, 0, panelWidth, panelHeight});
     Hud::DrawCenteredText("Game Over", 180, 26, 32, Hud::Gold);
     Hud::DrawCenteredText(TextFormat("Caught by the %s", Enemies::Name(killer)),
@@ -35,16 +43,13 @@ inline void Draw(int width, int height, Choice choice, Enemies::Kind killer, con
     char time[24];
     clock.Format(time);
     Hud::DrawCenteredText(TextFormat("Time %s   Souls %llu", time, souls), 180, 91, 15, Hud::Gold);
-    Hud::DrawCenteredText(TextFormat("Seed %lu", static_cast<unsigned long>(clock.seed)), 180, 111, 13, Hud::DimText);
+    Hud::DrawCenteredText(TextFormat("Gold %llu  Score %llu  Seed %lu",gold,souls+gold,static_cast<unsigned long>(clock.seed)), 180, 111, 13, Hud::DimText);
     Hud::DrawDivider(28, 132, 304);
     const char* labels[] = {"Restart", "Return to Main Menu"};
     for (int i = 0; i < 2; ++i)
     {
         const bool selected = i == static_cast<int>(choice);
-        const Rectangle box{34, 146.0f + i * 47, 292, 39};
-        DrawRectangleRounded(box, 0.18f, 4, selected ? Color{64, 46, 33, 255} : Hud::KeyBackground);
-        DrawRectangleRoundedLinesEx(box, 0.18f, 4, selected ? 2 : 1, selected ? Hud::Brass : Hud::Border);
-        Hud::DrawCenteredText(labels[i], 180, static_cast<int>(box.y) + 10, 18, selected ? Hud::Gold : Hud::Text);
+        UI::Button(Button(i),labels[i],selected,layout);
     }
     Hud::DrawCenteredText("Enter / Space to confirm", 180, 246, 14, Hud::DimText);
     EndMode2D();

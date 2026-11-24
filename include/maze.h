@@ -23,6 +23,7 @@ constexpr bool Contains(int column, int row)
 struct Layout
 {
     bool floor[Rows][Columns]{};
+    bool locked[Rows][Columns]{}; // Runtime side-room gates; base topology stays intact.
     Rooms::Room rooms[static_cast<int>(Rooms::Id::Count)]{};
     Cell spawn{};
     Cell futureExit{};
@@ -31,7 +32,7 @@ struct Layout
 
     constexpr bool IsWalkable(int column, int row) const
     {
-        return Contains(column, row) && floor[row][column];
+        return Contains(column, row) && floor[row][column] && !locked[row][column];
     }
 
     const char* LocationName(Cell cell) const

@@ -13,12 +13,13 @@ struct PhysicalStats
     int health;
 };
 
-inline constexpr PhysicalStats SentinelStats{40, 7 * Maze::CellSize, 36, 0.93f, 0.98f, 3};
-inline constexpr PhysicalStats StalkerStats{85, 6 * Maze::CellSize, 29, 0.42f, 0.86f, 1};
+inline constexpr PhysicalStats SentinelStats{40, 6 * Maze::CellSize, 36, 0.93f, 0.98f, 3};
+inline constexpr PhysicalStats StalkerStats{85, 5 * Maze::CellSize, 29, 0.42f, 0.86f, 1};
 inline const PhysicalStats& Stats(Kind kind) { return kind == Kind::Sentinel ? SentinelStats : StalkerStats; }
 
-constexpr int SentinelCap = 3;
-constexpr int StalkerCap = 4;
+constexpr int SentinelCap = 5;
+constexpr int StalkerCap = 6;
+constexpr float WizardLeash=9*Maze::CellSize, DemonLeash=8*Maze::CellSize;
 constexpr float InitialPhysicalGrace = GraceSeconds;
 constexpr float MinSpawnInterval = 45;
 constexpr float MaxSpawnInterval = 75;
@@ -30,6 +31,12 @@ constexpr int MinSpawnSteps = 21;
 constexpr float MinSpawnDistance = 9 * Maze::CellSize;
 constexpr float DeathDuration = 0.52f;
 constexpr float HitReaction = 0.23f;
+constexpr int PhysicalAttackImpactFrame=4; // Inspected Wizard/Demon attack sheets.
+inline float AttackFollowThrough(Kind kind)
+{
+    const int frames=kind==Kind::Sentinel?8:7;
+    return Stats(kind).windup*(frames-PhysicalAttackImpactFrame)/PhysicalAttackImpactFrame;
+}
 
 struct PhysicalEnemy
 {
@@ -41,6 +48,9 @@ struct PhysicalEnemy
     float hurt = 0;
     bool swung = false;
     bool struck = false;
+    float animationTime=0;
+    float attackVisual=0;
+    bool mirrored=false;
 
     void Spawn(Kind kind, Vector2 origin, float rest)
     {
@@ -64,7 +74,7 @@ public:
     const auto& Actors() const { return actors; }
 
     void Update(float dt, Vector2 player, const Rectangle& viewport, const Lighting::DungeonLight& light,
-                const Exploration::Map& exploration, bool swing, Vector2 facing, Health& health)
+                const Exploration::Map& exploration, bool swing, Vector2 facing, Health& health, bool hidden=false)
     {
         const bool sheltered = InEntrance(level, CellAt(CellAt(player)));
         int pursuers = 0;
@@ -76,7 +86,9 @@ public:
             actor.body.traveled = 0;
             const bool wasPursuing = Pursuing(actor);
             if (swing && !sheltered) Strike(actor, player, facing);
-            Tick(actor, player, sheltered, wasPursuing || pursuers < ActivePursuitCap, dt, health);
+            Tick(actor, player, sheltered, wasPursuing || pursuers < ActivePursuitCap, dt, health,hidden);
+            actor.animationTime=std::fmod(actor.animationTime+dt,60.0f);
+            if(std::fabs(actor.body.facing.x)>0.01f) actor.mirrored=actor.body.facing.x<0;
             pursuers += static_cast<int>(Pursuing(actor)) - wasPursuing;
         }
         if (!populated)
@@ -99,6 +111,7 @@ public:
                 return true;
         return false;
     }
+    void InvalidateRoutes() { for(auto& actor:actors) actor.body.lastGoal=NoCell; }
 
 private:
     static bool Pursuing(const PhysicalEnemy& actor)
@@ -122,13 +135,15 @@ private:
                   const Exploration::Map& exploration)
     {
         const auto distances = Maze::MeasureDistances(level, CellAt(CellAt(player)));
+        int farthest=MinSpawnSteps;
+        for(const auto& row:distances.value) for(int value:row) farthest=std::max(farthest,value);
         // Interleave types across increasing distance bands from the entrance.
         int knights = 0, stalkers = 0;
         for (int i = 0; i < static_cast<int>(actors.size()); ++i)
         {
             const bool stalker = stalkers < StalkerCap && (i % 2 == 0 || knights == SentinelCap);
             const int index = stalker ? SentinelCap + stalkers++ : knights++;
-            TrySpawn(index, 24 + 13 * i, InitialPhysicalGrace, distances, player, viewport, light, exploration);
+            TrySpawn(index, MinSpawnSteps+(farthest-MinSpawnSteps)*(i+1)/(static_cast<int>(actors.size())+1), InitialPhysicalGrace, distances, player, viewport, light, exploration);
         }
     }
 
@@ -141,7 +156,10 @@ private:
             const int slot = (i + nextSlot) % count;
             if (actors[slot].active) continue;
             const auto distances = Maze::MeasureDistances(level, CellAt(CellAt(player)));
-            if (TrySpawn(slot, 26, SpawnRest, distances, player, viewport, light, exploration))
+            int farthest=MinSpawnSteps;
+            for(const auto& row:distances.value) for(int value:row) farthest=std::max(farthest,value);
+            const int desired=MinSpawnSteps+static_cast<int>(NextRandom()%static_cast<unsigned>(std::max(1,farthest-MinSpawnSteps)));
+            if (TrySpawn(slot, desired, SpawnRest, distances, player, viewport, light, exploration))
                 nextSlot = (slot + 1) % count;
             return;
         }
@@ -188,6 +206,7 @@ private:
         if (actor.health <= 0 || !InAttackArc(player, facing, actor.body.position, MeleeReach, MeleeHalfArc)
             || !Maze::HasLineOfSight(level, player, actor.body.position)) return;
         actor.struck = true;
+        actor.attackVisual=0;
         --actor.health;
         actor.hurt = HitReaction;
         actor.body.state = actor.health == 0 ? State::Dying : State::Recovering;
@@ -200,18 +219,19 @@ private:
         {
             // Finish the current cardinal edge before turning toward a new goal.
             const int start = body.route.Remaining() ? body.route.cells[body.route.next] : CellAt(body.position);
-            if (body.kind == Kind::Sentinel) FindSentinelRoute(level, start, goal, body.route, body.home);
+            if (body.kind == Kind::Sentinel) FindSentinelRoute(level, start, goal, body.route, body.home,WizardLeash);
             else FindFloorRoute(level, start, goal, body.route, body.home,
-                [&](int, int, Maze::Cell cell) { return InEntrance(level, cell); });
+                [&](int, int, Maze::Cell cell) { return InEntrance(level, cell); },DemonLeash);
             body.lastGoal = goal;
         }
         FollowWaypoint(body, dt);
     }
 
-    void Tick(PhysicalEnemy& actor, Vector2 player, bool sheltered, bool mayPursue, float dt, Health& health) const
+    void Tick(PhysicalEnemy& actor, Vector2 player, bool sheltered, bool mayPursue, float dt, Health& health,bool hidden) const
     {
         Enemy& body = actor.body;
         ++body.updates;
+        actor.attackVisual=std::max(0.0f,actor.attackVisual-dt);
         if (!actor.struck) actor.timer = std::max(0.0f, actor.timer - dt);
         actor.hurt = std::max(0.0f, actor.hurt - dt);
         if (body.state == State::Dying)
@@ -223,12 +243,14 @@ private:
         const auto& stats = Stats(body.kind);
         const bool stalker = body.kind == Kind::Stalker;
         const float distance = DistanceSquared(body.position, player);
-        const bool canTrack = !sheltered && DistanceSquared(body.home, player) <= LeashRadius * LeashRadius;
-        const bool sight = canTrack && Maze::HasLineOfSight(level, body.position, player);
+        const float leash=stalker?DemonLeash:WizardLeash;
+        const bool canTrack = !sheltered && DistanceSquared(body.home, player) <= leash*leash;
+        const bool sight = !hidden && canTrack && Maze::HasLineOfSight(level, body.position, player);
         if (body.state == State::WindingUp)
         {
             if (actor.timer > 0) return;
             actor.swung = true;
+            actor.attackVisual=AttackFollowThrough(body.kind);
             if (sight && InAttackArc(body.position, body.facing, player, stats.reach + 4, 0.9f))
                 health.Hit(body.kind);
             body.state = State::Recovering;
@@ -239,10 +261,10 @@ private:
 
         const bool tracking = sight && distance <= stats.detection * stats.detection;
         body.memory = tracking ? DisengageSeconds : std::max(0.0f, body.memory - dt);
-        if (mayPursue && canTrack && (tracking || (body.state == State::Chasing && body.memory > 0)) && !(stalker && body.state == State::Returning && actor.burst <= 0 && actor.timer > 0))
+        if (mayPursue && canTrack && (tracking || ((body.state == State::Chasing || body.state==State::Investigating) && body.memory > 0)) && !(stalker && body.state == State::Returning && actor.burst <= 0 && actor.timer > 0))
         {
             if (body.state != State::Chasing) actor.burst = StalkerBurst;
-            body.state = State::Chasing;
+            body.state = tracking?State::Chasing:State::Investigating;
             if (tracking) body.target = player;
             if (tracking && distance <= stats.reach * stats.reach)
             {
@@ -264,10 +286,19 @@ private:
             actor.timer = stats.recovery;
         }
 
+        if(body.state==State::Patrolling && DistanceSquared(body.position,body.target)>1)
+        {Navigate(body,CellAt(body.target),dt*PatrolSpeedFactor);return;}
         body.state = State::Returning;
         if (DistanceSquared(body.position, body.home) < 1)
         {
             body.state = actor.timer > 0 ? State::Recovering : State::Patrolling;
+            if(actor.timer<=0)
+                for(int d=0;d<4;++d)
+                {
+                    auto next=Maze::Neighbor(CellAt(CellAt(body.home)),(d+CellAt(body.home))%4);
+                    if(!level.IsWalkable(next.column,next.row)||InEntrance(level,next))continue;
+                    body.target=Center(CellId(next));Navigate(body,CellId(next),dt*PatrolSpeedFactor);break;
+                }
             return;
         }
         Navigate(body, CellAt(body.home), dt * (stalker ? 0.85f : PatrolSpeedFactor));

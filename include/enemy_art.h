@@ -2,6 +2,7 @@
 #define SHADOW_HUNT_ENEMY_ART_H
 
 #include "physical_enemies.h"
+#include "physical_sprite_art.h"
 #include <algorithm>
 #include <string>
 
@@ -38,8 +39,7 @@ public:
         ghost = LoadTextureFromImage(sheet);
         UnloadImage(sheet);
         if (!IsTextureValid(ghost)) { Unload(); return false; }
-        knight = LoadPortrait(root + "characters/knight.png");
-        stalker = LoadPortrait(root + "characters/hollow_stalker.png");
+        physical.Load(root);
         SetTextureFilter(angel, TEXTURE_FILTER_POINT);
         SetTextureFilter(ghost, TEXTURE_FILTER_POINT);
         return true;
@@ -49,9 +49,8 @@ public:
     {
         if (IsTextureValid(angel)) UnloadTexture(angel);
         if (IsTextureValid(ghost)) UnloadTexture(ghost);
-        if (IsTextureValid(knight)) UnloadTexture(knight);
-        if (IsTextureValid(stalker)) UnloadTexture(stalker);
-        angel = ghost = knight = stalker = {};
+        physical.Unload();
+        angel = ghost = {};
     }
 
     void DrawActor(const Enemy& enemy, float time) const
@@ -102,18 +101,24 @@ public:
             && actor.timer > stats.recovery - 0.14f) ? 1 : 0;
         const Color tint = actor.hurt > 0 ? Color{255, 157, 146, 255} : WHITE;
         DrawEllipse(static_cast<int>(p.x), static_cast<int>(p.y), 11, 4, Fade({15,10,16,255}, alpha * 0.65f));
-        Draw(enemy.kind, p, (enemy.kind == Kind::Sentinel ? 43.0f : 36.0f) * (0.76f + 0.24f * alpha),
+        if(!physical.Draw(actor)) Draw(enemy.kind, p, (enemy.kind == Kind::Sentinel ? 43.0f : 36.0f) * (0.76f + 0.24f * alpha),
              false, gait, enemy.facing.x < 0, dying ? (1 - alpha) * 26 : (intent * -8 + lunge * 13) * (enemy.facing.x < 0 ? -1 : 1), intent, Fade(tint, alpha));
         if (intent > 0)
         {
             const float start = std::atan2(enemy.facing.y, enemy.facing.x) * 57.29578f;
             DrawRing(p, stats.reach - 2, stats.reach, start - 37, start + 37, 18,
-                     Fade({249, 153, 89, 255}, 0.2f + 0.65f * intent));
+                     Fade(enemy.kind==Kind::Sentinel?Color{188,112,255,255}:Color{249,153,89,255}, 0.2f + 0.65f * intent));
         }
         if (actor.swung || (enemy.state == State::Recovering && actor.hurt <= 0 && actor.timer > stats.recovery - 0.16f))
         {
             const float start = std::atan2(enemy.facing.y, enemy.facing.x) * 57.29578f;
-            DrawRing(p, stats.reach - 6, stats.reach + 2, start - 44, start + 44, 20, {255, 181, 115, 185});
+            if(enemy.kind==Kind::Sentinel)
+            {
+                const Vector2 spell{p.x+enemy.facing.x*stats.reach*0.65f,p.y+enemy.facing.y*stats.reach*0.65f};
+                DrawPolyLinesEx(spell,6,11,actor.animationTime*90,1.5f,{218,148,255,220});
+                DrawCircleGradient(spell,13,{172,74,240,130},BLANK);
+            }
+            else DrawRing(p, stats.reach - 6, stats.reach + 2, start - 44, start + 44, 20, {255, 181, 115, 185});
         }
     }
 
@@ -132,15 +137,8 @@ public:
         }
         if (kind == Kind::Sentinel || kind == Kind::Stalker)
         {
-            const Texture2D texture = kind == Kind::Sentinel ? knight : stalker;
-            if (!IsTextureValid(texture))
+            if (!physical.Portrait(kind,feet,height,time,mirrored,tint))
                 DrawPlaceholder(kind, feet, height, time, mirrored, angle, tint);
-            else
-            {
-                const float width = static_cast<float>(texture.width);
-                DrawFrame(texture, {0, 0, mirrored ? -width : width, float(texture.height)},
-                          feet, height, width / 2, tint, angle + 2 * time);
-            }
             return;
         }
         const int cycle = static_cast<int>(std::fmod(time, 1.0f) * 6);
@@ -221,7 +219,7 @@ private:
 
     Texture2D angel{};
     Texture2D ghost{};
-    Texture2D knight{}, stalker{};
+    PhysicalSprites physical;
 };
 }
 #endif

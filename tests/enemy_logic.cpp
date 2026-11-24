@@ -338,7 +338,8 @@ void PhysicalCombat()
     update(0.02f);
     for (int frame = 0; frame < 260 && stalker.body.state == State::Dormant; ++frame)
         update(0.05f);
-    assert(stalker.body.state == State::Chasing && stalker.body.route.searches == 1);
+    // Territorial patrols may already have searched before this encounter.
+    assert(stalker.body.state == State::Chasing && stalker.body.route.searches >= 1);
     for (int frame = 0; frame < 60 && stalker.body.state == State::Chasing; ++frame)
         update(0.02f);
     assert(stalker.body.state == State::WindingUp);

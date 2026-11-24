@@ -4,6 +4,7 @@
 #include "enemy_art.h"
 #include "game_hud.h"
 #include "parchment_map.h"
+#include "ui_interaction.h"
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -27,11 +28,11 @@ constexpr Entry Entries[] = {
     {Enemies::Kind::Ghost, "Phasing Ghost", "A sudden chill marks its approach. It senses nearby footsteps through walls and can also spot you in the open.",
      "Step away when the Ghost gathers strength. A hit costs one heart. Active torchlight wards the floor around you. Escape its territory or shelter in the Entrance Hall.",
      "Dijkstra's algorithm", "Floor costs one and walls cost five. A custom min-heap expands the cheapest route first. A cheaper arrival updates the tile's cost and parent. Warded crossings are forbidden."},
-    {Enemies::Kind::Sentinel, "Fallen Sentinel",
-     "An armored knight with three hearts. It raises its sword before a slash that costs one heart.",
-     "Step out of its swing, then strike during recovery. Torchlight does not stop it. The Entrance Hall is safe.",
+    {Enemies::Kind::Sentinel, "Fallen Wizard",
+     "A slow fallen mage with three hearts. It charges a close magical strike that costs one heart.",
+     "Step out of its spell's reach, then strike during recovery. Torchlight does not stop it. The Entrance Hall is safe.",
      "A* search", "Each floor step costs one. The shared min-heap ranks cells by steps taken plus Manhattan distance. That distance is a lower bound because steps are cardinal. Parents give the route back."},
-    {Enemies::Kind::Stalker, "Hollow Stalker",
+    {Enemies::Kind::Stalker, "Demon",
      "It sprints in bursts and crouches before lunging. One hit drops it. Its lunge costs one heart.",
      "Sidestep or back away from the lunge, then strike. Torches protect against spirits. This creature can cross torchlight.",
      "Breadth-first search", "The shared FIFO queue visits open cells in order of distance. Each cell remembers its parent. The chain of parents gives the shortest route through the corridors."}
@@ -68,13 +69,32 @@ public:
 };
 
 inline bool Spread(int width, int height) { return width >= 660 && width > height * 1.1f; }
+inline Camera2D Layout(int width,int height)
+{
+    const int w=Spread(width,height)?704:350;
+    const float scale=std::min(width/float(w+34),height/540.0f);
+    return {{(width-w*scale)/2,(height-510*scale)/2},{0,0},0,scale};
+}
+inline Rectangle PageButton(int index,int width)
+{
+    if(index==0) return {0,489,110,28};
+    if(index==1) return {width-110.0f,489,110,28};
+    return {width/2.0f-48,489,96,28};
+}
+inline bool ClosePressed()
+{
+    const int width=GetScreenWidth(),height=GetScreenHeight();
+    return UI::Click(PageButton(2,Spread(width,height)?704:350),Layout(width,height));
+}
 inline void Navigate(int& leaf)
 {
     const bool wide = Spread(GetScreenWidth(), GetScreenHeight());
     if (wide) leaf -= leaf % 2;
     const int step = wide ? 2 : 1;
-    if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) leaf = (leaf + LeafCount - step) % LeafCount;
-    else if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) leaf = (leaf + step) % LeafCount;
+    const int width=wide?704:350;
+    const Camera2D layout=Layout(GetScreenWidth(),GetScreenHeight());
+    if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A) || UI::Click(PageButton(0,width),layout)) leaf = (leaf + LeafCount - step) % LeafCount;
+    else if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D) || UI::Click(PageButton(1,width),layout)) leaf = (leaf + step) % LeafCount;
 }
 
 inline int Paragraph(Font font, std::string_view words, int x, int y, float width = 284)
@@ -116,7 +136,7 @@ inline void DrawLeaf(int leaf, int x, const Enemies::Sprites& sprites, Font face
         DrawEllipse(x+175, 173, 80, 89, Color{151,106,65,61});
         DrawEllipseLines(x+175, 173, 81, 90, Color{148,100,57,170});
         sprites.Draw(entry.kind, {float(x+175),246}, 144, false,
-                     entry.kind == Enemies::Kind::Ghost ? time : 0.0f);
+                     entry.kind == Enemies::Kind::Angel ? 0.0f : time);
         Hud::DrawCenteredText(entry.name, x+175, 280, 26, ink);
         DrawRectangle(x+86, 320, 178, 1, Parchment::Border);
         Paragraph(face, entry.description, x+32, 341);
@@ -136,9 +156,9 @@ inline void Draw(int width, int height, const Enemies::Sprites& sprites, const T
 {
     const bool wide = Spread(width, height);
     const int w = wide ? 704 : 350;
-    const float scale = std::min(width / float(w+34), height / 540.0f);
     DrawRectangle(0, 0, width, height, {12,8,12,200});
-    BeginMode2D({{(width-w*scale)/2, (height-510*scale)/2}, {0,0}, 0, scale});
+    const Camera2D layout=Layout(width,height);
+    BeginMode2D(layout);
     DrawRectangleRounded({-9,-8,float(w+18),498},0.045f,5,{70,39,31,255});
     DrawRectangleRoundedLinesEx({-8,-7,float(w+16),496},0.045f,5,2,Hud::Brass);
     for (int y = 476; y < 484; y += 2) DrawRectangle(2,y,w-4,2,y%4 ? Parchment::Border : Hud::Gold);
@@ -149,7 +169,9 @@ inline void Draw(int width, int height, const Enemies::Sprites& sprites, const T
         DrawRectangle(350,0,4,476,{92,56,38,255});
         DrawLeaf(first+1,354,sprites,type.face,time);
     }
-    Hud::DrawCenteredText("Left / Right to turn    B / Esc to close",w/2,499,14,Hud::Gold);
+    UI::Button(PageButton(0,w),"< Previous",false,layout,14);
+    UI::Button(PageButton(1,w),"Next >",false,layout,14);
+    UI::Button(PageButton(2,w),"Close",false,layout,14);
     EndMode2D();
 }
 }

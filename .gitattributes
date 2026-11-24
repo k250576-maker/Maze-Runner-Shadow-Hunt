@@ -1,0 +1,3 @@
+# Preserve original design files without text or line-ending conversion.
+*.ai binary
+*.eps binary

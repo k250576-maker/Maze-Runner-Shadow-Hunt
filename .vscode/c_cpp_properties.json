@@ -5,10 +5,10 @@
       "name": "windows-gcc-x64",
       "includePath": [
         "${workspaceFolder}/include",
-        "C:/mingw64/include"
+        "C:/msys64/ucrt64/include"
       ],
       "cppStandard": "c++17",
-      "compilerPath": "C:/mingw64/bin/g++.exe",
+      "compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
       "intelliSenseMode": "windows-gcc-x64",
       "cStandard": "${default}"
     }

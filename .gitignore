@@ -12,6 +12,9 @@
 
 # Laptop-only Mesa launcher.
 /run.ps1
+/settings.cfg
+# Windows shortcuts shipped with asset exports are machine-specific, not art.
+/assets/**/*.lnk
 
 # Optional local audio with unverified redistribution rights.
 /assets/audio/music/*kA7c3SpzZDA*

@@ -5,13 +5,14 @@
 #include "game_hud.h"
 #include "menu_backdrop.h"
 #include "credits.h"
+#include "ui_interaction.h"
 #include <algorithm>
 #include <cmath>
 
 namespace MainMenu
 {
-enum class Item { StartGame, Controls, Mobcyclopedia, Credits, Quit, Count };
-enum class Overlay { None, Controls, Book, Credits };
+enum class Item { StartGame, Controls, Mobcyclopedia, Credits, Settings, Quit, Count };
+enum class Overlay { None, Controls, Book, Credits, Settings };
 
 struct State
 {
@@ -20,6 +21,17 @@ struct State
     float   time         = 0.0f;
     Overlay overlay      = Overlay::None;
 };
+
+inline Camera2D OptionsLayout(int width,int height)
+{
+    const bool stacked=width<height;
+    const float scale=std::min(width/690.0f,height/620.0f);
+    const float x=width*(stacked?0.50f:0.29f)-158*scale;
+    const float y=stacked?std::max(height*0.64f-468*scale*0.5f,
+                                  height*MenuBackdrop::StackedFloor+90*scale):(height-468*scale)*0.5f;
+    return {{std::round(x),std::round(y)},{0,0},0,scale};
+}
+inline Rectangle OptionButton(int i) { return {29,123.0f+i*49,258,40}; }
 
 inline void NavigateUp(State& state)
 {
@@ -38,29 +50,33 @@ inline void NavigateDown(State& state)
 // 'confirmed' is set only on return true; Controls is handled internally.
 inline bool HandleInput(State& state, Item& confirmed)
 {
+    if(state.overlay==Overlay::Settings)return false; // Shared panel is handled by the app.
     if (state.overlay == Overlay::Book)
     {
         Mobcyclopedia::Navigate(state.bookLeaf);
-        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE))
-            state.overlay = Overlay::None;
+        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B) || UI::ConfirmKey() || Mobcyclopedia::ClosePressed())
+            { state.overlay = Overlay::None; UI::ScreenChanged(); }
         return false;
     }
     if (state.overlay == Overlay::Credits)
     {
-        if (Credits::CloseOrOpenLink()) state.overlay = Overlay::None;
+        if (Credits::CloseOrOpenLink()) { state.overlay = Overlay::None; UI::ScreenChanged(); }
         return false;
     }
     if (state.overlay == Overlay::Controls)
     {
-        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_I) || IsKeyPressed(KEY_ENTER)
-            || IsKeyPressed(KEY_SPACE))
-            state.overlay = Overlay::None;
+        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_I) || UI::ConfirmKey() || UI::BackPressed())
+            { state.overlay = Overlay::None; UI::ScreenChanged(); }
         return false;
     }
-    if (IsKeyPressed(KEY_UP)   || IsKeyPressed(KEY_W)) NavigateUp(state);
-    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) NavigateDown(state);
-    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE))
+    int selected=static_cast<int>(state.selected);
+    const bool activate=UI::Select(selected,static_cast<int>(Item::Count),OptionButton,
+                                   OptionsLayout(GetScreenWidth(),GetScreenHeight()));
+    state.selected=static_cast<Item>(selected);
+    if (activate)
     {
+        UI::ScreenChanged();
+        if(state.selected==Item::Settings){state.overlay=Overlay::Settings;return false;}
         if (state.selected == Item::Controls)
         {
             state.overlay = Overlay::Controls;
@@ -83,22 +99,16 @@ inline bool HandleInput(State& state, Item& confirmed)
     return false;
 }
 
-inline void DrawOptions(int width, int height, const State& state, float scale, bool stacked)
+inline void DrawOptions(int width, int height, const State& state)
 {
     constexpr int panelWidth = 316;
-    constexpr int panelHeight = 419;
+    constexpr int panelHeight = 468;
     constexpr int centerX = panelWidth / 2;
     constexpr int buttonHeight = 40;
     constexpr int textSize = 19;
-    constexpr int stackedArtClearance = 90;
-    constexpr const char* labels[] = {"START GAME", "CONTROLS", "MOBCYCLOPEDIA", "CREDITS", "QUIT"};
+    constexpr const char* labels[] = {"START GAME", "CONTROLS", "MOBCYCLOPEDIA", "CREDITS", "SETTINGS", "QUIT"};
     static_assert(sizeof(labels) / sizeof(labels[0]) == static_cast<int>(Item::Count));
-    const float panelX = width * (stacked ? 0.50f : 0.29f) - centerX * scale;
-    const float panelY = stacked
-        ? std::max(height * 0.64f - panelHeight * scale * 0.5f,
-                   height * MenuBackdrop::StackedFloor + stackedArtClearance * scale)
-        : (height - panelHeight * scale) * 0.5f;
-    const Camera2D layout{{std::round(panelX), std::round(panelY)}, {0, 0}, 0, scale};
+    const Camera2D layout=OptionsLayout(width,height);
     BeginMode2D(layout);
     Hud::DrawStonePanel({0, 0, panelWidth, panelHeight});
     Hud::DrawCenteredText("MAZE RUNNER", centerX + 2, 34, 37, Color{9, 7, 10, 255});
@@ -108,7 +118,7 @@ inline void DrawOptions(int width, int height, const State& state, float scale, 
 
     for (int i = 0; i < static_cast<int>(Item::Count); ++i)
     {
-        const bool selected = static_cast<int>(state.selected) == i;
+        const bool selected = static_cast<int>(state.selected) == i || UI::Hover(OptionButton(i),layout);
         const int y = 123 + i * 49;
         const Rectangle button{29, static_cast<float>(y), panelWidth - 58, buttonHeight};
         DrawRectangleRounded({button.x, button.y + 2, button.width, button.height},
@@ -129,8 +139,8 @@ inline void DrawOptions(int width, int height, const State& state, float scale, 
                               textSize, selected ? Color{255, 229, 180, 255} : Hud::DimText);
     }
 
-    Hud::DrawCenteredText("W/S or arrows to move", centerX, 377, 13, Hud::DimText);
-    Hud::DrawCenteredText("Enter / Space to select", centerX, 394, 13, Hud::DimText);
+    Hud::DrawCenteredText("W/S or arrows to move", centerX, 426, 13, Hud::DimText);
+    Hud::DrawCenteredText("Enter / Space to select", centerX, 443, 13, Hud::DimText);
     EndMode2D();
 }
 
@@ -146,9 +156,12 @@ inline void Draw(int width, int height, const State& state, const MenuBackdrop::
     else if (state.overlay == Overlay::Credits)
         Credits::Draw(width, height, type.face);
     else if (state.overlay == Overlay::Controls)
+    {
         Hud::DrawControls(width, height, "Esc / Enter / Space / I to return to menu");
+        UI::DrawBack(width,height);
+    }
     else
-        DrawOptions(width, height, state, scale, stacked);
+        DrawOptions(width, height, state);
 }
 
 } // namespace MainMenu

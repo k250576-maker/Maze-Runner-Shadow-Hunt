@@ -194,3 +194,50 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic tests/enemy_logic.cpp -o build/enemy-log
 
 The test covers fixed seeds, pursuit, flashlight occlusion, wall collision,
 weighted routes, torch intersection and retreat, damage, and grace.
+
+## Exploration, hiding and keys
+
+Audio Settings is available from the main and pause menus. Drag the three
+sliders or select with Up/Down and adjust with Left/Right. Defaults are Master
+80%, Music 25%, SFX 30%; these category gains scale the existing individual mix.
+Music/SFX mutes are independent. Preferences are saved in the ignored project
+root `settings.cfg` (beside `assets/`, regardless of launch directory). Missing
+or malformed entries use defaults and valid numeric values are clamped.
+The device applies Master once; streams/effects apply category and individual
+gains, preserving fades, distance attenuation and the quiet paused mix.
+
+Press **E** for the closest usable interaction. Enter a barrel from within 14
+world pixels of its center; E emerges at the unchanged, valid player position
+when no living enemy overlaps the exit area. Hidden players cannot move or
+attack. Physical enemies and the Angel investigate their last sighting; the
+Ghost still senses and damages hidden players. Red warnings have a cooldown.
+
+Bronze and Silver keys use bits 0 and 1; the Escape Key uses bit 2. Both side
+rooms lock their complete generated doorway. All three keys are selected from
+the starting component with the side doors closed. A custom-queue BFS over
+`(cell, key mask)` validates progression, including the sealed exit. Doors
+change shared walkability; unlocking invalidates cached routes and torch light.
+The exit requires the Escape Key, E to unlock, then crossing its threshold.
+
+The physical pool allows five Wizards (6-tile detection, 9-tile leash) and six
+Demons (5-tile detection, 8-tile leash). BFS distance bands spread initial homes
+throughout the dungeon; replacements retain distance, camera and spacing checks.
+Existing A*, BFS, Dijkstra and custom heaps/queues remain in use.
+
+Gold is separate from Souls: Wizards drop 3–6 and Demons 1–3, using a seeded
+LCG. Twelve chests hold 10–25 gold each; two reward the locked side rooms.
+Opening reveals a separate owned pickup without crediting gold. Collection
+changes `CLOSED -> OPEN_WITH_GOLD -> EMPTY` and awards the reward once.
+Preserve the matching `chests-01.png` in all three `CLOSED`, `OPEN_GOLD`, and
+`OPEN_EMPTY` / `NO_BACKLIGHT` asset folders. These are state variants, not
+animation frames. Recorded SFX are `minecraft-chest-open-and-close.mp3` and
+`diablo-2-gold.mp3` in `assets/audio/sfx/`; missing recordings mute that cue.
+Tile-indexed gold aggregation/nearby collection is O(1) per local tile, and
+fixed interaction arrays bound nearest-object scans. Score = Souls + Gold.
+Barrels, chests and decorative webs do not add corridor collision.
+
+Generation, rewards and hiding checks:
+```powershell
+g++ -std=c++17 -Wall -Wextra tests/exploration_logic.cpp -o build/exploration-logic.exe -lraylib -lopengl32 -lgdi32 -lwinmm
+& ./build/exploration-logic.exe
+```

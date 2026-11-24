@@ -3,6 +3,7 @@
 
 #include "raylib.h"
 #include "enemy.h"
+#include "audio_preferences.h"
 #include <cstdint>
 #include <algorithm>
 #include <array>
@@ -29,6 +30,8 @@ constexpr float EnemyHitVolume = 0.28f;
 constexpr float PlayerDamageVolume = 0.34f;
 constexpr float EnemySoundRange = 220.0f;
 constexpr float FootstepVolume = 0.075f;
+constexpr float GoldPickupVolume = 0.22f;
+constexpr float ChestOpeningVolume = 0.20f;
 constexpr float StepDistance = 78.0f;
 constexpr float MinimumWalkDistance = 28.0f;
 constexpr float StepInterval = 0.52f;
@@ -130,6 +133,20 @@ class System
     enum class Scene { Menu, Gameplay };
 
 public:
+    void ApplySettings(AudioPreferences::Settings settings)
+    {
+        settings.Validate();preferences=settings;
+        if(!deviceReady)return;
+        // Master is applied ONLY by the device; category/individual gains below
+        // never multiply it again.
+        SetMasterVolume(preferences.master);
+        for(int i=0;i<voiceCount;++i)
+            SetSoundVolume(voices[i].sound,preferences.SfxGain()*voices[i].individual);
+        if(IsMusicValid(menuMusic))SetMusicGain(menuMusic,activeScene==Scene::Menu?MenuMusicVolume*musicGain*(paused?0.3f:1):0);
+        if(IsMusicValid(gameMusic))SetMusicGain(gameMusic,activeScene==Scene::Gameplay?GameplayMusicVolume*musicGain*(paused?0.3f:1):0);
+        for(int i=0;i<static_cast<int>(melodies.size());++i)
+            if(IsMusicValid(melodies[i]))SetMusicGain(melodies[i],i==activeMelody?MelodyVolume*melodyGain*(paused?0.3f:1):0);
+    }
     void Initialize(const std::string& assetRoot, Soundtrack selection)
     {
         InitAudioDevice();
@@ -139,7 +156,9 @@ public:
             TraceLog(LOG_WARNING, "Audio device unavailable. Continuing with game audio muted.");
             return;
         }
-        SetMasterVolume(MasterVolume);
+        SetMasterVolume(preferences.master);
+        LoadLootSound(chest,assetRoot+"audio/sfx/minecraft-chest-open-and-close.mp3",ChestOpeningVolume);
+        LoadLootSound(goldPickup,assetRoot+"audio/sfx/diablo-2-gold.mp3",GoldPickupVolume);
         const std::string dir = assetRoot + "audio/music/";
         // Menu music: always Deep Dungeon when available, looped from the start.
         if (!LoadLocalTrack(menuMusic, dir, "deep_dungeon"))
@@ -160,12 +179,15 @@ public:
             }
         }
         for (std::size_t i = 0; i < enemies.size(); ++i)
+        {
             enemies[i] = Synthesize(static_cast<Cue>(i));
+            SetSfxGain(enemies[i],1.0f);
+        }
         activeScene = requestedScene = Scene::Menu;
         musicGain = 1.0f;
         if (IsMusicValid(menuMusic))
         {
-            SetMusicVolume(menuMusic, MenuMusicVolume);
+            SetMusicGain(menuMusic, MenuMusicVolume);
             PlayMusicStream(menuMusic);
         }
 
@@ -185,9 +207,10 @@ public:
         }
         Wave impact{static_cast<unsigned>(samples.size()), 22050, 16, 1, samples.data()};
         damage = LoadSoundFromWave(impact);
-        if (IsSoundValid(damage)) SetSoundVolume(damage, PlayerDamageVolume);
+        if (IsSoundValid(damage)) SetSfxGain(damage, PlayerDamageVolume);
 
         const std::string local = assetRoot + "audio/sfx/footsteps-use-it-again.mp3";
+        footstepPath=local;
         Wave wave = FileExists(local.c_str()) ? LoadWave(local.c_str()) : Wave{};
         if (IsWaveValid(wave))
         {
@@ -198,23 +221,42 @@ public:
         }
         if (!IsWaveValid(wave))
         {
+            TraceLog(LOG_WARNING,"Recorded footsteps unavailable: %s. Using bundled stone_step.wav.",local.c_str());
             const std::string fallback = assetRoot + "audio/sfx/stone_step.wav";
+            footstepPath=fallback;
             if (FileExists(fallback.c_str())) wave = LoadWave(fallback.c_str());
         }
-        if (!IsWaveValid(wave)) return;
+        if (!IsWaveValid(wave))
+        { TraceLog(LOG_WARNING,"No usable footsteps at %s.",footstepPath.c_str()); footstepPath.clear(); return; }
         ApplyFootstepEnvelope(wave);
         footstep = LoadSoundFromWave(wave);
         UnloadWave(wave);
-        if (IsSoundValid(footstep)) SetSoundVolume(footstep, FootstepVolume);
+        if (IsSoundValid(footstep))
+        {
+            SetSfxGain(footstep, FootstepVolume);
+            TraceLog(LOG_INFO,"Footstep source: %s (volume %.3f, stride %.0f px)",footstepPath.c_str(),FootstepVolume,StepDistance);
+        }
     }
+
+    const std::string& FootstepSource() const { return footstepPath; }
 
     void CollectSoul()
     {
         if (!deviceReady || DamagePlaying()) return;
         Sound& sound = Clip(Cue::Soul);
         if (!IsSoundValid(sound) || IsSoundPlaying(sound)) return;
-        SetSoundVolume(sound, 0.22f);
+        SetSfxGain(sound, 0.22f);
         PlaySound(sound);
+    }
+    void OpenChest()
+    {
+        if(!deviceReady || paused || !IsSoundValid(chest) || IsSoundPlaying(chest))return;
+        PlaySound(chest);
+    }
+    void CollectGold()
+    {
+        if(!deviceReady || paused || !IsSoundValid(goldPickup) || IsSoundPlaying(goldPickup))return;
+        PlaySound(goldPickup);
     }
 
     void Damage(Enemies::Kind source = Enemies::Kind::Angel)
@@ -227,12 +269,17 @@ public:
         if (IsSoundValid(Clip(Cue::Soul))) StopSound(Clip(Cue::Soul));
         if (IsSoundValid(damage)) StopSound(damage);
         if (IsSoundValid(Clip(Cue::GhostStrike))) StopSound(Clip(Cue::GhostStrike));
-        SetSoundVolume(impact, PlayerDamageVolume);
+        SetSfxGain(impact, PlayerDamageVolume);
         PlaySound(impact);
     }
 
     void TransitionToGame(std::uint32_t seed = 0)
     {
+        if(IsSoundValid(victory)) StopSound(victory);
+        if(IsSoundValid(footstep)) StopSound(footstep);
+        stepProgress=StepDistance-MinimumWalkDistance;
+        timeSinceStep=StepInterval;
+        idleTime=0;
         requestedScene = Scene::Gameplay;
         StopMelody();
         nextMelody = static_cast<int>(seed % melodies.size());
@@ -242,15 +289,63 @@ public:
 
     void TransitionToMenu()
     {
+        if(IsSoundValid(victory)) StopSound(victory);
         requestedScene = Scene::Menu;
+    }
+
+    void SetPaused(bool value)
+    {
+        if (paused==value || !deviceReady) return;
+        paused=value;
+        if (paused)
+        {
+            StopCue(motion); StopCue(action);
+            if(IsSoundValid(footstep)) StopSound(footstep);
+            if(IsSoundValid(damage)) StopSound(damage);
+            if(IsSoundValid(chest)) StopSound(chest);
+            if(IsSoundValid(goldPickup)) StopSound(goldPickup);
+            for(auto& sound:enemies) if(IsSoundValid(sound)) StopSound(sound);
+            stepProgress=StepDistance-MinimumWalkDistance;
+            idleTime=0;
+        }
+        if(IsMusicValid(ActiveMusic())) SetMusicGain(ActiveMusic(),ActiveVolume()*musicGain);
+        if(activeMelody>=0) SetMusicGain(melodies[activeMelody],MelodyVolume*melodyGain*(paused?0.3f:1.0f));
+    }
+
+    void PlayVictory()
+    {
+        if(!deviceReady) return;
+        if(!IsSoundValid(victory))
+        {
+            // Original ascending three-note chime; no external recording.
+            std::array<short,22050> notes{};
+            constexpr float pitches[]={523.25f,659.25f,783.99f};
+            for(std::size_t i=0;i<notes.size();++i)
+            {
+                const float t=float(i)/22050;
+                float value=0;
+                for(int note=0;note<3;++note)
+                {
+                    const float age=t-note*0.18f;
+                    if(age>=0) value+=std::sin(2*PI*pitches[note]*age)*std::exp(-age*5)*std::min(1.0f,age*90);
+                }
+                notes[i]=static_cast<short>(3200*value);
+            }
+            Wave wave{static_cast<unsigned>(notes.size()),22050,16,1,notes.data()};
+            victory=LoadSoundFromWave(wave);
+            if(IsSoundValid(victory)) SetSfxGain(victory,0.3f);
+        }
+        if(IsSoundValid(victory)) PlaySound(victory);
     }
 
     void Update(float pixelsMoved, bool quiet = false, const EnemyAudio& cues = {})
     {
         if (!deviceReady) return;
         const float dt = GetFrameTime();
-        UpdateMelody(dt, quiet);
+        if(!paused) UpdateMelody(dt, quiet);
+        else if(activeMelody>=0 && !melodyPaused) UpdateMusicStream(melodies[activeMelody]);
         UpdateMusic(dt);
+        if(paused) return;
         UpdateCues(dt, cues);
 
         if (!IsSoundValid(footstep)) return;
@@ -275,6 +370,9 @@ public:
     {
         if (!deviceReady) return;
         if (IsSoundValid(damage)) UnloadSound(damage);
+        if (IsSoundValid(victory)) UnloadSound(victory);
+        if (IsSoundValid(chest)) UnloadSound(chest);
+        if (IsSoundValid(goldPickup)) UnloadSound(goldPickup);
         for (auto& sound : enemies) if (IsSoundValid(sound)) UnloadSound(sound);
         for (Music& track : melodies) if (IsMusicValid(track)) UnloadMusicStream(track);
         if (IsSoundValid(footstep))   UnloadSound(footstep);
@@ -285,9 +383,32 @@ public:
         menuMusic = {};
         gameMusic = {};
         deviceReady = false;
+        voiceCount=0;
     }
 
 private:
+    void SetMusicGain(Music music,float individual)
+    {
+        if(IsMusicValid(music))SetMusicVolume(music,preferences.MusicGain()*std::clamp(individual,0.0f,1.0f));
+    }
+    void SetSfxGain(Sound sound,float individual)
+    {
+        if(!IsSoundValid(sound))return;
+        individual=std::clamp(individual,0.0f,1.0f);
+        int index=0;
+        while(index<voiceCount && voices[index].sound.stream.buffer!=sound.stream.buffer)++index;
+        if(index==voiceCount && voiceCount<static_cast<int>(voices.size()))++voiceCount;
+        if(index<static_cast<int>(voices.size()))voices[index]={sound,individual};
+        SetSoundVolume(sound,preferences.SfxGain()*individual);
+    }
+    void LoadLootSound(Sound& target,const std::string& path,float volume)
+    {
+        if(!FileExists(path.c_str())){TraceLog(LOG_WARNING,"Loot sound missing; continuing muted: %s",path.c_str());return;}
+        target=LoadSound(path.c_str());
+        if(!IsSoundValid(target)){TraceLog(LOG_WARNING,"Loot sound unreadable: %s",path.c_str());return;}
+        SetSfxGain(target,volume); // Raylib master gain applies normally.
+        TraceLog(LOG_INFO,"Loot sound loaded: %s (volume %.2f)",path.c_str(),volume);
+    }
     Sound& Clip(Cue cue) { return enemies[static_cast<unsigned>(cue)]; }
     void StopCue(Cue& cue)
     {
@@ -301,7 +422,7 @@ private:
         if (cue == Cue::Count || !IsSoundValid(Clip(cue))) return;
         const float gain = std::clamp(1.0f - distance / EnemySoundRange, 0.0f, 1.0f);
         current = cue;
-        SetSoundVolume(Clip(cue), volume * gain * gain);
+        SetSfxGain(Clip(cue), volume * gain * gain);
         PlaySound(Clip(cue));
     }
 
@@ -358,7 +479,7 @@ private:
             if (!IsMusicValid(melodies[nextMelody])) nextMelody = 1 - nextMelody;
             activeMelody = nextMelody;
             nextMelody = 1 - nextMelody;
-            SetMusicVolume(melodies[activeMelody], 0);
+            SetMusicGain(melodies[activeMelody], 0);
             PlayMusicStream(melodies[activeMelody]);
         }
 
@@ -376,7 +497,7 @@ private:
         const float target = quiet ? std::clamp(remaining / MelodyFade, 0.0f, 1.0f) : 0.0f;
         const float step = dt / (quiet ? MelodyFade : MelodyDangerFade);
         melodyGain += std::clamp(target - melodyGain, -step, step);
-        SetMusicVolume(melody, MelodyVolume * melodyGain);
+        SetMusicGain(melody, MelodyVolume * melodyGain);
 
         if (!IsMusicStreamPlaying(melody) || remaining <= 0.03f)
         {
@@ -428,7 +549,7 @@ private:
 
     float ActiveVolume() const
     {
-        return activeScene == Scene::Menu ? MenuMusicVolume : GameplayMusicVolume;
+        return (activeScene == Scene::Menu ? MenuMusicVolume : GameplayMusicVolume)*(paused?0.3f:1.0f);
     }
 
     void UpdateMusic(float dt)
@@ -442,7 +563,7 @@ private:
                 const float faded = std::min(musicGain, fadeStep);
                 musicGain -= faded;
                 fadeStep -= faded;
-                SetMusicVolume(outgoing, ActiveVolume() * musicGain);
+                SetMusicGain(outgoing, ActiveVolume() * musicGain);
                 if (musicGain > 0.0f)
                 {
                     UpdateMusicStream(outgoing);
@@ -458,7 +579,7 @@ private:
             Music& incoming = ActiveMusic();
             if (IsMusicValid(incoming))
             {
-                SetMusicVolume(incoming, 0.0f);
+                SetMusicGain(incoming, 0.0f);
                 PlayMusicStream(incoming);
             }
         }
@@ -468,15 +589,20 @@ private:
         if (musicGain < 1.0f)
         {
             musicGain = std::min(1.0f, musicGain + fadeStep);
-            SetMusicVolume(current, ActiveVolume() * musicGain);
+            SetMusicGain(current, ActiveVolume() * musicGain);
         }
         UpdateMusicStream(current);
     }
 
     bool  deviceReady = false;
+    AudioPreferences::Settings preferences;
+    struct Voice {Sound sound{};float individual=1;};
+    std::array<Voice,32> voices{};
+    int voiceCount=0;
+    bool paused = false;
     Music menuMusic{};
     Music gameMusic{};
-    Sound footstep{}, damage{};
+    Sound footstep{}, damage{}, victory{}, chest{}, goldPickup{};
     std::array<Sound, static_cast<unsigned>(Cue::Count)> enemies{};
     Cue motion = Cue::Count, action = Cue::Count;
     float motionDelay = 0;
@@ -492,6 +618,7 @@ private:
     float stepProgress = StepDistance - MinimumWalkDistance;
     float timeSinceStep = StepInterval;
     float idleTime = 0;
+    std::string footstepPath;
 
 };
 }

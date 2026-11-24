@@ -81,6 +81,7 @@ public:
     }
 
     bool BlocksEdge(int id, int d) const { return (blocked[id] & (1 << d)) != 0; }
+    void Invalidate(){ready=false;mapped.fill(false);std::fill(lit.begin(),lit.end(),false);}
     bool IsClear(Vector2 point) const { return SegmentClear(point, point); }
 
     bool SegmentClear(Vector2 a, Vector2 b) const
@@ -127,7 +128,7 @@ private:
 
 template <typename BlocksEdge>
 inline void FindFloorRoute(const Maze::Layout& level, int start, int goal, Route& route,
-                           Vector2 home, BlocksEdge blocked)
+                           Vector2 home, BlocksEdge blocked,float leash=LeashRadius)
 {
     BeginSearch(route);
     if (start == NoCell || goal == NoCell) return;
@@ -151,7 +152,7 @@ inline void FindFloorRoute(const Maze::Layout& level, int start, int goal, Route
             const Maze::Cell cell = Maze::Neighbor(CellAt(current), direction);
             if (!level.IsWalkable(cell.column, cell.row) || blocked(current, direction, cell)) continue;
             const int next = CellId(cell);
-            if (DistanceSquared(Center(next), home) > LeashRadius * LeashRadius || visited[next]) continue;
+            if (DistanceSquared(Center(next), home) > leash * leash || visited[next]) continue;
             visited[next] = true;
             parent[next] = current;
             queue.Push(next);
@@ -239,7 +240,7 @@ inline int Manhattan(int from, int goal)
     return std::abs(a.column - b.column) + std::abs(a.row - b.row);
 }
 
-inline void FindSentinelRoute(const Maze::Layout& level, int start, int goal, Route& route, Vector2 home)
+inline void FindSentinelRoute(const Maze::Layout& level, int start, int goal, Route& route, Vector2 home,float leash=LeashRadius)
 {
     BeginSearch(route);
     if (start == NoCell || goal == NoCell) return;
@@ -265,7 +266,7 @@ inline void FindSentinelRoute(const Maze::Layout& level, int start, int goal, Ro
             if (!level.IsWalkable(cell.column, cell.row) || InEntrance(level, cell)) continue;
             const int next = CellId(cell);
             const int candidate = cost[current] + FloorCost;
-            if (candidate >= cost[next] || DistanceSquared(Center(next), home) > LeashRadius * LeashRadius) continue;
+            if (candidate >= cost[next] || DistanceSquared(Center(next), home) > leash * leash) continue;
             cost[next] = candidate;
             // Cardinal, unit-cost steps make Manhattan distance a consistent lower bound.
             rank[next] = candidate + Manhattan(next, goal);
@@ -303,7 +304,7 @@ inline void FindGhostRoute(const Maze::Layout& level, const TorchBarrier& barrie
         for (int direction = 0; direction < 4; ++direction)
         {
             const auto cell = Maze::Neighbor(CellAt(current), direction);
-            if (!Maze::Contains(cell.column, cell.row) || barrier.BlocksEdge(current, direction)) continue;
+            if (!Maze::Contains(cell.column, cell.row) || level.locked[cell.row][cell.column] || barrier.BlocksEdge(current, direction)) continue;
             const int next = CellId(cell);
             if (DistanceSquared(Center(next), home) > LeashRadius * LeashRadius) continue;
             const int candidate = cost[current] + (level.IsWalkable(cell.column, cell.row) ? FloorCost : WallCost);

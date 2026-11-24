@@ -36,7 +36,7 @@ constexpr Color AmbientMaskColor{
 constexpr float BeamFullStrengthFraction = 0.60f;
 constexpr float PointFullStrengthFraction = 0.15f;
 constexpr float RaySpacingDegrees = 2.0f;
-constexpr int MaxStaticLights = 24;
+constexpr int MaxStaticLights = Maze::MaxTorches + 1; // Torches plus the reserved exit beacon.
 constexpr float WallFaceDepth = 9.0f;
 constexpr float WallBounceDepth = 14.0f;
 constexpr float WallInteriorFalloff = 0.22f;
@@ -184,8 +184,9 @@ public:
     // with range, cone, and line-of-sight checks.
     bool IsWorldPositionObserved(Vector2 worldPosition) const
     {
-        return IsPlayerLit(worldPosition, false);
+        return observerEnabled && IsPlayerLit(worldPosition, false);
     }
+    void SetObserverEnabled(bool value){observerEnabled=value;}
 
     // Tests local light sources for gameplay, independent of the ambient rendering floor.
     bool IsWorldPositionIlluminated(Vector2 worldPosition) const
@@ -227,6 +228,7 @@ private:
     Vector2 origin{};
     float facingAngle = PI * 0.5f;
     bool maskReady = false;
+    bool observerEnabled = true;
     std::vector<BouncePatch> bouncePatches;
 
     void RestoreStaticLighting(Vector2 previous) const

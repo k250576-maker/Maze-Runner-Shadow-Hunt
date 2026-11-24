@@ -37,7 +37,7 @@ inline void DrawPaper(int x, int y, int width, int height, float scale)
         }
 }
 
-inline void DrawChart(const Exploration::Map& discovery, Vector2 player, GridView grid, int x, int y)
+inline void DrawChart(const Exploration::Map& discovery, Vector2 player, GridView grid, int x, int y, const Maze::Layout& level)
 {
     for (int dy = 0; dy < grid.rows; ++dy)
         for (int dx = 0; dx < grid.columns; ++dx)
@@ -53,6 +53,34 @@ inline void DrawChart(const Exploration::Map& discovery, Vector2 player, GridVie
                 DrawLine(left + 1, top + grid.pitch - 2, left + grid.pitch - 2, top + 1, Ink);
         }
 
+    // Permanent symbols do not modify the discovery grid or reveal a route.
+    const auto landmark=[&](Maze::Cell cell,bool exit)
+    {
+        const float px=(cell.column+0.5f-grid.column)*grid.pitch;
+        const float py=(cell.row+0.5f-grid.row)*grid.pitch;
+        const bool outside=px<0 || py<0 || px>=grid.columns*grid.pitch || py>=grid.rows*grid.pitch;
+        const float sx=x+std::clamp(px,3.0f,grid.columns*grid.pitch-3.0f);
+        const float sy=y+std::clamp(py,3.0f,grid.rows*grid.pitch-3.0f);
+        const Color color=exit?Color{255,202,67,255}:Color{39,113,90,255};
+        const float size=std::max(3.0f,grid.pitch*0.62f);
+        if(outside)
+        {
+            float dx=px-grid.columns*grid.pitch/2,dy=py-grid.rows*grid.pitch/2;
+            const float length=std::sqrt(dx*dx+dy*dy);dx/=length;dy/=length;
+            DrawTriangle({sx+dx*size,sy+dy*size},
+                         {sx-dx*size*0.6f+dy*size*0.65f,sy-dy*size*0.6f-dx*size*0.65f},
+                         {sx-dx*size*0.6f-dy*size*0.65f,sy-dy*size*0.6f+dx*size*0.65f},color);
+            return;
+        }
+        if(exit)
+        {
+            DrawRectangle(static_cast<int>(sx-size),static_cast<int>(sy-size),static_cast<int>(2*size),static_cast<int>(2*size),color);
+            DrawRectangle(static_cast<int>(sx-size/2),static_cast<int>(sy-size/2),std::max(1,static_cast<int>(size)),std::max(1,static_cast<int>(1.5f*size)),Ink);
+        }
+        else DrawPoly({sx,sy},4,std::max(4.0f,grid.pitch*0.85f),0,color);
+    };
+    landmark(level.spawn,false);
+    landmark(level.futureExit,true);
     const Vector2 center{x + (player.x / Maze::CellSize - grid.column) * grid.pitch,
                          y + (player.y / Maze::CellSize - grid.row) * grid.pitch};
     const float radius = std::max(2.0f, grid.pitch * 0.45f);
@@ -60,7 +88,7 @@ inline void DrawChart(const Exploration::Map& discovery, Vector2 player, GridVie
     DrawCircleV(center, radius, Marker);
 }
 
-inline void DrawCompact(const Exploration::Map& discovery, Vector2 player, Maze::Cell cell, float scale)
+inline void DrawCompact(const Exploration::Map& discovery, Vector2 player, Maze::Cell cell, float scale, const Maze::Layout& level)
 {
     const int pitch = Hud::Pixels(scale, CompactCellPixels);
     const int columns = std::min(CompactCells, Maze::Columns);
@@ -78,16 +106,16 @@ inline void DrawCompact(const Exploration::Map& discovery, Vector2 player, Maze:
     DrawText("M", margin + width - padding - MeasureText("M", font), margin + padding, font, Ink);
     DrawLine(margin + padding, margin + padding + header - 3, margin + width - padding,
              margin + padding + header - 3, Border);
-    DrawChart(discovery, player, grid, margin + padding, margin + padding + header);
+    DrawChart(discovery, player, grid, margin + padding, margin + padding + header,level);
 }
 
-inline void DrawExpanded(const Exploration::Map& discovery, Vector2 player, int width, int height, float scale)
+inline void DrawExpanded(const Exploration::Map& discovery, Vector2 player, int width, int height, float scale,const Maze::Layout& level,bool exitOpen=true)
 {
     const int margin = Hud::Pixels(scale, ExpandedMargin);
     const int padding = Hud::Pixels(scale, 16);
-    const int header = Hud::Pixels(scale, 35);
+    const int header = Hud::Pixels(scale, 55);
     const int pitch = std::min((width - 2 * (margin + padding)) / Maze::Columns,
-                               (height - 2 * (margin + padding) - header) / Maze::Rows);
+                               (height - 2 * (margin + padding) - header - 32) / Maze::Rows);
     if (pitch < 1) return;
     const int paperWidth = Maze::Columns * pitch + 2 * padding;
     const int paperHeight = Maze::Rows * pitch + 2 * padding + header;
@@ -100,10 +128,11 @@ inline void DrawExpanded(const Exploration::Map& discovery, Vector2 player, int 
     DrawText("Exploration map", x + padding, y + padding, font, Ink);
     DrawText("M / Esc", x + paperWidth - padding - MeasureText("M / Esc", keyFont),
              y + padding + (font - keyFont) / 2, keyFont, Ink);
+    DrawText(TextFormat("Start: green   Exit: %s (gold)   You: red",exitOpen?"open":"LOCKED"),x+padding,y+padding+font+4,Hud::Pixels(scale,12),Ink);
     DrawLine(x + padding, y + padding + header - 4,
              x + paperWidth - padding, y + padding + header - 4, Border);
     DrawChart(discovery, player, {0, 0, Maze::Columns, Maze::Rows, pitch},
-              x + padding, y + padding + header);
+              x + padding, y + padding + header,level);
 }
 }
 #endif

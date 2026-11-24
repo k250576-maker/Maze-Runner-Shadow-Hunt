@@ -16,8 +16,8 @@ inline const char* Name(Kind kind)
     {
         case Kind::Angel: return "Weeping Angel";
         case Kind::Ghost: return "Phasing Ghost";
-        case Kind::Sentinel: return "Fallen Sentinel";
-        case Kind::Stalker: return "Hollow Stalker";
+        case Kind::Sentinel: return "Fallen Wizard";
+        case Kind::Stalker: return "Demon";
     }
     return "";
 }

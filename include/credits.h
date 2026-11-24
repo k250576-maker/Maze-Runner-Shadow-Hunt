@@ -30,11 +30,10 @@ inline Rectangle SourceButton(int row) { return {386, 115.0f + 61 * row, 102, 27
 
 inline bool CloseOrOpenLink()
 {
-    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) return true;
-    const auto cursor = GetScreenToWorld2D(GetMousePosition(), Layout(GetScreenWidth(), GetScreenHeight()));
+    if (IsKeyPressed(KEY_ESCAPE) || UI::ConfirmKey() || UI::BackPressed()) return true;
     for (int i = 0; i < 3; ++i)
         if (IsKeyPressed(KEY_ONE + i) ||
-            (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(cursor, SourceButton(i))))
+            UI::Click(SourceButton(i), Layout(GetScreenWidth(), GetScreenHeight())))
             OpenURL(Music[i].source);
     return false;
 }
@@ -55,9 +54,7 @@ inline void Draw(int width, int height, Font font)
         DrawText(Music[i].title,34,y,20,ink);
         Mobcyclopedia::Paragraph(font, Music[i].credit,34,y+25,330);
         const Rectangle box = SourceButton(i);
-        DrawRectangleRounded(box,0.22f,4,{146,102,62,65});
-        DrawRectangleRoundedLines(box,0.22f,4,Parchment::Border);
-        Hud::DrawCenteredText(TextFormat("Source %d", i+1),437,y+3,15,ink);
+        UI::Button(box,TextFormat("Source %d",i+1),false,Layout(width,height),15);
     }
     DrawRectangle(34,301,Width-68,1,Parchment::Border);
     DrawText("Development",34,315,20,ink);
@@ -65,6 +62,7 @@ inline void Draw(int width, int height, Font font)
     Mobcyclopedia::Paragraph(font,Statement,34,373,Width-68);
     Hud::DrawCenteredText("1 / 2 / 3 for sources    Esc to return", Width/2, Height+15, 15, Hud::Gold);
     EndMode2D();
+    UI::DrawBack(width,height);
 }
 }
 #endif
