@@ -71,11 +71,10 @@ struct Distances
     int reached = 0;
 };
 
-inline Distances MeasureDistances(const Layout& layout)
+inline Distances MeasureDistances(const Layout& layout, Cell start)
 {
     Distances result;
     for (auto& row : result.value) std::fill_n(row, Columns, -1);
-    const Cell start = layout.spawn;
     if (!layout.IsWalkable(start.column, start.row)) return result;
     Queue<Cell, Rows * Columns> queue;
     queue.Push(start);
@@ -93,6 +92,11 @@ inline Distances MeasureDistances(const Layout& layout)
         }
     }
     return result;
+}
+
+inline Distances MeasureDistances(const Layout& layout)
+{
+    return MeasureDistances(layout, layout.spawn);
 }
 
 struct GeneratedLevel

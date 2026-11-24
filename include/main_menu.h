@@ -3,33 +3,22 @@
 
 #include "raylib.h"
 #include "game_hud.h"
+#include "menu_backdrop.h"
+#include "credits.h"
+#include <algorithm>
 #include <cmath>
 
-// Medieval/dark-fantasy main menu. Matches the dungeon HUD palette.
 namespace MainMenu
 {
-// Palette — all colors use the same muted gold and stone tones as the HUD.
-constexpr Color BackgroundDark{7, 6, 9, 255};
-constexpr Color StoneBand{11, 10, 14, 255};
-constexpr Color BorderOuter{70, 55, 46, 255};
-constexpr Color BorderInner{45, 38, 32, 255};
-constexpr Color PanelFill{13, 11, 16, 215};
-constexpr Color Divider{75, 60, 50, 255};
-constexpr Color TitleGold{229, 205, 167, 255};  // Hud::Gold
-constexpr Color SubtitleTone{150, 128, 104, 255};
-constexpr Color ItemSelected{248, 224, 174, 255};
-constexpr Color ItemNormal{148, 133, 115, 255};
-constexpr Color ItemHighlight{32, 26, 18, 210};
-constexpr Color ItemHighlightBorder{88, 68, 46, 190};
-constexpr Color HintColor{82, 72, 60, 200};
-
-enum class Item { StartGame = 0, Controls = 1, Quit = 2, Count = 3 };
+enum class Item { StartGame, Controls, Mobcyclopedia, Credits, Quit, Count };
+enum class Overlay { None, Controls, Book, Credits };
 
 struct State
 {
+    int bookLeaf = 0;
     Item    selected     = Item::StartGame;
     float   time         = 0.0f;
-    bool    controlsOpen = false;
+    Overlay overlay      = Overlay::None;
 };
 
 inline void NavigateUp(State& state)
@@ -49,11 +38,23 @@ inline void NavigateDown(State& state)
 // 'confirmed' is set only on return true; Controls is handled internally.
 inline bool HandleInput(State& state, Item& confirmed)
 {
-    if (state.controlsOpen)
+    if (state.overlay == Overlay::Book)
+    {
+        Mobcyclopedia::Navigate(state.bookLeaf);
+        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE))
+            state.overlay = Overlay::None;
+        return false;
+    }
+    if (state.overlay == Overlay::Credits)
+    {
+        if (Credits::CloseOrOpenLink()) state.overlay = Overlay::None;
+        return false;
+    }
+    if (state.overlay == Overlay::Controls)
     {
         if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_I) || IsKeyPressed(KEY_ENTER)
             || IsKeyPressed(KEY_SPACE))
-            state.controlsOpen = false;
+            state.overlay = Overlay::None;
         return false;
     }
     if (IsKeyPressed(KEY_UP)   || IsKeyPressed(KEY_W)) NavigateUp(state);
@@ -62,7 +63,18 @@ inline bool HandleInput(State& state, Item& confirmed)
     {
         if (state.selected == Item::Controls)
         {
-            state.controlsOpen = true;
+            state.overlay = Overlay::Controls;
+            return false;
+        }
+        if (state.selected == Item::Mobcyclopedia)
+        {
+            state.bookLeaf = 0;
+            state.overlay = Overlay::Book;
+            return false;
+        }
+        if (state.selected == Item::Credits)
+        {
+            state.overlay = Overlay::Credits;
             return false;
         }
         confirmed = state.selected;
@@ -71,140 +83,72 @@ inline bool HandleInput(State& state, Item& confirmed)
     return false;
 }
 
-// Draws animated torch flicker at world position (x, y).
-inline void DrawTorchFlame(float x, float y, float time, float seed, float scale)
+inline void DrawOptions(int width, int height, const State& state, float scale, bool stacked)
 {
-    const float f1 = std::sin(time * 7.3f  + seed)        * 0.5f + 0.5f;
-    const float f2 = std::sin(time * 11.7f + seed * 2.3f) * 0.5f + 0.5f;
-    const float f3 = std::sin(time * 5.1f  + seed * 0.7f) * 0.5f + 0.5f;
+    constexpr int panelWidth = 316;
+    constexpr int panelHeight = 419;
+    constexpr int centerX = panelWidth / 2;
+    constexpr int buttonHeight = 40;
+    constexpr int textSize = 19;
+    constexpr int stackedArtClearance = 90;
+    constexpr const char* labels[] = {"START GAME", "CONTROLS", "MOBCYCLOPEDIA", "CREDITS", "QUIT"};
+    static_assert(sizeof(labels) / sizeof(labels[0]) == static_cast<int>(Item::Count));
+    const float panelX = width * (stacked ? 0.50f : 0.29f) - centerX * scale;
+    const float panelY = stacked
+        ? std::max(height * 0.64f - panelHeight * scale * 0.5f,
+                   height * MenuBackdrop::StackedFloor + stackedArtClearance * scale)
+        : (height - panelHeight * scale) * 0.5f;
+    const Camera2D layout{{std::round(panelX), std::round(panelY)}, {0, 0}, 0, scale};
+    BeginMode2D(layout);
+    Hud::DrawStonePanel({0, 0, panelWidth, panelHeight});
+    Hud::DrawCenteredText("MAZE RUNNER", centerX + 2, 34, 37, Color{9, 7, 10, 255});
+    Hud::DrawCenteredText("MAZE RUNNER", centerX, 32, 37, Hud::Gold);
+    Hud::DrawCenteredText("SHADOW HUNT", centerX, 75, 17, Color{187, 151, 103, 255});
+    Hud::DrawDivider(29, 107, panelWidth - 58);
 
-    const float outerR = scale * (38.0f + f1 * 10.0f + f2 * 6.0f);
-    const float midR   = scale * (18.0f + f2 *  5.0f + f3 * 4.0f);
-    const float coreR  = scale * (7.0f  + f1 *  2.0f);
-    const Vector2 center{x, y};
-    const int     ix = static_cast<int>(x);
-    const int     iy = static_cast<int>(y);
-
-    // Broad ambient glow.
-    DrawCircleGradient(center, outerR,
-        Color{160, 72, 10, static_cast<unsigned char>(28 + f1 * 18)},
-        Color{0, 0, 0, 0});
-    // Orange mid-flame.
-    DrawCircleGradient(center, midR,
-        Color{230, 110, 20, static_cast<unsigned char>(170 + f2 * 50)},
-        Color{140, 40, 0, 0});
-    // Bright core.
-    DrawCircleGradient(center, coreR,
-        Color{255, 230, 140, 230},
-        Color{255, 140, 30, 60});
-    // Bracket stub below the flame.
-    const int bx = ix - Hud::Pixels(scale, 3);
-    const int by = iy + Hud::Pixels(scale, 4);
-    DrawRectangle(bx, by, Hud::Pixels(scale, 6), Hud::Pixels(scale, 10), Color{90, 72, 60, 255});
-    DrawRectangle(bx - Hud::Pixels(scale, 2), by - Hud::Pixels(scale, 3),
-                  Hud::Pixels(scale, 10), Hud::Pixels(scale, 4), Color{70, 55, 45, 255});
-}
-
-// Draws the main menu screen (not the controls overlay).
-inline void Draw(int width, int height, const State& state, float scale)
-{
-    // Stone background: solid dark base with subtle alternating vertical bands.
-    ClearBackground(BackgroundDark);
-    const int band = Hud::Pixels(scale, 56);
-    for (int x = 0; x < width; x += band * 2)
-        DrawRectangle(x, 0, band, height, StoneBand);
-
-    // Edge vignette to focus the eye on the centre.
-    const int vigW = width / 5;
-    DrawRectangleGradientH(0,          0, vigW,    height, Color{0,0,0,150}, Color{0,0,0,0});
-    DrawRectangleGradientH(width-vigW, 0, vigW,    height, Color{0,0,0,0},   Color{0,0,0,150});
-    DrawRectangleGradientV(0,           0, width,  height/5, Color{0,0,0,120}, Color{0,0,0,0});
-    DrawRectangleGradientV(0, height*4/5, width,  height/5, Color{0,0,0,0},   Color{0,0,0,120});
-
-    // Torches flanking the central panel.
-    const float torchY  = height * 0.40f;
-    const float torchLX = width  * 0.17f;
-    const float torchRX = width  * 0.83f;
-    DrawTorchFlame(torchLX, torchY, state.time, 0.0f,  scale);
-    DrawTorchFlame(torchRX, torchY, state.time, 3.14f, scale);
-
-    // Central panel.
-    const int panelW  = Hud::Pixels(scale, 330);
-    const int panelH  = Hud::Pixels(scale, 272);
-    const int panelX  = (width  - panelW) / 2;
-    const int panelY  = (height - panelH) / 2;
-    const int border  = Hud::Pixels(scale, 2);
-    DrawRectangle(panelX, panelY, panelW, panelH, PanelFill);
-    DrawRectangleLines(panelX,          panelY,          panelW,          panelH,          BorderOuter);
-    DrawRectangleLines(panelX + border, panelY + border, panelW - border*2, panelH - border*2, BorderInner);
-
-    // Title.
-    const int titleSz    = Hud::Pixels(scale, 34);
-    const int subtitleSz = Hud::Pixels(scale, 17);
-    const char* line1    = "MAZE RUNNER";
-    const char* line2    = "Shadow Hunt";
-    const int l1w        = MeasureText(line1, titleSz);
-    const int l2w        = MeasureText(line2, subtitleSz);
-    const int titleY     = panelY + Hud::Pixels(scale, 26);
-    // Drop shadow then text.
-    DrawText(line1, (width - l1w) / 2 + 2, titleY + 2,                           titleSz,    Color{0,0,0,180});
-    DrawText(line1, (width - l1w) / 2,     titleY,                               titleSz,    TitleGold);
-    DrawText(line2, (width - l2w) / 2 + 1, titleY + titleSz + Hud::Pixels(scale,3) + 1, subtitleSz, Color{0,0,0,150});
-    DrawText(line2, (width - l2w) / 2,     titleY + titleSz + Hud::Pixels(scale,3),    subtitleSz, SubtitleTone);
-
-    // Horizontal rule.
-    const int ruleY   = titleY + titleSz + subtitleSz + Hud::Pixels(scale, 14);
-    const int ruleX0  = panelX + Hud::Pixels(scale, 22);
-    const int ruleW   = panelW - Hud::Pixels(scale, 44);
-    DrawRectangle(ruleX0, ruleY, ruleW, Hud::Pixels(scale, 1), Divider);
-
-    // Menu items.
-    const char* labels[] = {"START GAME", "CONTROLS", "QUIT"};
-    const int   itemSz   = Hud::Pixels(scale, 19);
-    const int   spacing  = Hud::Pixels(scale, 44);
-    const int   firstY   = ruleY + Hud::Pixels(scale, 22);
-    const int   pad      = Hud::Pixels(scale, 8);
-
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < static_cast<int>(Item::Count); ++i)
     {
-        const bool sel    = (static_cast<int>(state.selected) == i);
-        const int  lw     = MeasureText(labels[i], itemSz);
-        const int  itemX  = (width - lw) / 2;
-        const int  itemY  = firstY + i * spacing;
-
-        if (sel)
+        const bool selected = static_cast<int>(state.selected) == i;
+        const int y = 123 + i * 49;
+        const Rectangle button{29, static_cast<float>(y), panelWidth - 58, buttonHeight};
+        DrawRectangleRounded({button.x, button.y + 2, button.width, button.height},
+                             0.24f, 4, Color{12, 10, 14, 255});
+        DrawRectangleRounded(button, 0.24f, 4,
+                             selected ? Color{65, 47, 32, 255} : Color{35, 32, 37, 255});
+        if (selected)
         {
-            // Subtle highlight box.
-            DrawRectangle(itemX - pad*2, itemY - pad/2, lw + pad*4, itemSz + pad,
-                          ItemHighlight);
-            DrawRectangleLines(itemX - pad*2, itemY - pad/2, lw + pad*4, itemSz + pad,
-                               ItemHighlightBorder);
-            // Arrow indicator.
-            DrawText(">", itemX - Hud::Pixels(scale, 20), itemY, itemSz, ItemSelected);
+            const auto shimmer = static_cast<unsigned char>(22 + 8 * std::sin(state.time * 2.0f));
+            DrawRectangleRounded({button.x - 3, button.y - 3, button.width + 6, button.height + 6},
+                                 0.24f, 4, Color{193, 137, 69, shimmer});
+            DrawRectangleRoundedLinesEx(button, 0.24f, 4, 2, Color{176, 133, 78, 255});
+            DrawPoly({49, button.y + buttonHeight * 0.5f}, 4, 4, 0, Hud::Gold);
+            DrawPoly({panelWidth - 49, button.y + buttonHeight * 0.5f}, 4, 4, 0, Hud::Gold);
         }
-        // Shadow then label.
-        DrawText(labels[i], itemX + 1, itemY + 1, itemSz, Color{0,0,0,150});
-        DrawText(labels[i], itemX,     itemY,     itemSz, sel ? ItemSelected : ItemNormal);
+        else DrawRectangleRoundedLines(button, 0.24f, 4, Hud::Border);
+        Hud::DrawCenteredText(labels[i], centerX, y + (buttonHeight - textSize) / 2,
+                              textSize, selected ? Color{255, 229, 180, 255} : Hud::DimText);
     }
 
-    // Navigation hint.
-    const int   hintSz = Hud::Pixels(scale, 11);
-    const char* hint   = "W/S or UP/DOWN to navigate   ENTER to select";
-    const int   hintW  = MeasureText(hint, hintSz);
-    DrawText(hint, (width - hintW) / 2,
-             panelY + panelH - Hud::Pixels(scale, 20), hintSz, HintColor);
+    Hud::DrawCenteredText("W/S or arrows to move", centerX, 377, 13, Hud::DimText);
+    Hud::DrawCenteredText("Enter / Space to select", centerX, 394, 13, Hud::DimText);
+    EndMode2D();
 }
 
-// Draws the controls overlay (reuses the HUD panel, adds a return prompt).
-inline void DrawControlsScreen(int width, int height, float scale)
+inline void Draw(int width, int height, const State& state, const MenuBackdrop::Castle& castle,
+                 Texture2D stone, Texture2D player, const Enemies::Sprites& enemySprites, const Mobcyclopedia::Type& type)
 {
-    Hud::DrawControls(width, height, scale);
-    const int   sz  = Hud::Pixels(scale, 13);
-    const char* msg = "Press Esc or Enter to return to menu";
-    const int   mw  = MeasureText(msg, sz);
-    // Position below the standard panel.
-    DrawText(msg, (width - mw) / 2, height / 2 + Hud::Pixels(scale, 110), sz,
-             Color{180, 165, 148, 220});
+    const bool stacked = width < height;
+    const float scale = std::min(width / 690.0f, height / 558.0f);
+    castle.Draw(stone, player, width, height, scale * (stacked ? MenuBackdrop::StackedZoom : 2.38f),
+                stacked, state.time);
+    if (state.overlay == Overlay::Book)
+        Mobcyclopedia::Draw(width, height, enemySprites, type, state.bookLeaf, state.time);
+    else if (state.overlay == Overlay::Credits)
+        Credits::Draw(width, height, type.face);
+    else if (state.overlay == Overlay::Controls)
+        Hud::DrawControls(width, height, "Esc / Enter / Space / I to return to menu");
+    else
+        DrawOptions(width, height, state, scale, stacked);
 }
 
 } // namespace MainMenu

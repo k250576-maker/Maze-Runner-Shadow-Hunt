@@ -6,7 +6,7 @@
 namespace Torches
 {
 constexpr float ActivationRadius = 2.5f * Maze::CellSize;
-constexpr float ProtectionRadiusCells = 1.75f;
+constexpr float ProtectionRadiusCells = 2.0f;
 
 class State
 {
@@ -15,6 +15,7 @@ public:
 
     int Count() const { return level.torchCount; }
     bool IsLit(int index) const { return lit[index]; }
+    unsigned Revision() const { return revision; }
 
     Vector2 WorldPosition(int index) const
     {
@@ -35,6 +36,7 @@ public:
             lit[i] = true;
             changed = true;
         }
+        if (changed) ++revision;
         return changed;
     }
 
@@ -62,6 +64,7 @@ private:
 
     const Maze::Layout& level;
     bool lit[Maze::MaxTorches]{};
+    unsigned revision = 0;
 };
 }
 #endif

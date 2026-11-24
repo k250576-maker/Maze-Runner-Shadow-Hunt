@@ -1,5 +1,22 @@
 Maze Runner - Shadow Hunt audio credits
 
+Maze Runner – Shadow Hunt is a noncommercial university DSA Lab project developed for personal and educational demonstration. Third-party music remains the work of its respective creators.
+
+Rich House
+Music composed by Jeremy Soule. Supplied recording runs 1:10.
+Supplied upload: https://www.youtube.com/watch?v=8pZlkGHzTxc
+Artist: https://www.youtube.com/channel/UCkp6sGHhICPsNukwKlbw9Og
+Local playback: assets/audio/music/rich_house.mp3
+
+Elmshore
+Music composed by Justin Bell. Supplied recording runs 2:32.
+Official soundtrack: https://www.youtube.com/watch?v=4Un4UIdo9HA
+Artist: https://www.youtube.com/channel/UCKBT25tS42WnRAyS3cpIgiw
+Local playback: assets/audio/music/elmshore.mp3
+
+Keep these local recordings and conversions out of distributed builds.
+Attribution does not establish redistribution rights or endorsement.
+
 Dungeon Ambience by yd (dungeon002.ogg)
 Default exploration soundtrack. Listed as CC0 by the creator.
 https://opengameart.org/content/dungeon-ambience
@@ -9,17 +26,24 @@ Alternative soundtrack. Listed as CC0 by the creator. This edition fades in and 
 https://opengameart.org/content/dark-cavern-ambient
 
 Deep Dungeon — Fog Saburo
-Optional local soundtrack selected with --music deep-dungeon. The supplied
+Optional main-menu soundtrack. The supplied recording runs 3:02. The supplied
 file is an MP3. The local deep_dungeon.mp3 alias is a byte-for-byte copy.
 The creator's game redistribution terms could not be verified. Keep the
 original and local playback copies out of distributed builds.
 https://www.youtube.com/watch?v=kA7c3SpzZDA
 
 Footsteps (footsteps-use-it-again.mp3)
-Supplied locally. The creator and redistribution license are unverified.
-The game plays one step cropped in memory when this optional file is present.
-Keep the supplied recording out of distributed builds.
+Preferred local footstep source. The game crops one step in memory. The creator and redistribution license are
+unverified. Keep the supplied recording out of distributed builds.
 
 Stone step (stone_step.wav)
-Original synthesized sound made for this project. The shared build includes
-this one-step clip for players without the optional local recording.
+Original synthesized sound made for this project. The game uses this fallback clip,
+with a short envelope applied in memory.
+
+Player damage impact
+Original descending pulse and noise transient synthesized in memory for this game.
+
+Enemy effects
+Original procedural stone, whisper, metal, rasp, sword, lunge, and impact
+samples synthesized in memory for this game. The Ghost strike and soul chime
+are original procedural sounds as well.

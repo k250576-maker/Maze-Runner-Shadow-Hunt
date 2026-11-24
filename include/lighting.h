@@ -180,7 +180,7 @@ public:
         return IsPlayerLit(worldPosition, true);
     }
 
-    // Future Angel observation must use this: ONLY the directional flashlight,
+    // The Angel reacts to the directional flashlight,
     // with range, cone, and line-of-sight checks.
     bool IsWorldPositionObserved(Vector2 worldPosition) const
     {
