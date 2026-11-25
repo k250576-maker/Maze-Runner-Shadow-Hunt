@@ -18,8 +18,8 @@ void HiddenSensing()
     for(int i=0;i<30;++i)enemies.Update(0.02f,player,player,light,health,true);
     assert(enemies.Angel().state!=Enemies::State::Chasing&&enemies.Angel().windup==0);
     Enemies::PhysicalEnemies physical(*level);Exploration::Map map(*level);
-    player={144,144};physical.Update(0.01f,player,{120,120,100,100},light,map,false,{1,0},health,true);
-    for(int i=0;i<800;++i)physical.Update(0.02f,player,{120,120,100,100},light,map,false,{1,0},health,true);
+    player={144,144};physical.Update(0.01f,player,{120,120,100,100},light,map,health,true);
+    for(int i=0;i<800;++i)physical.Update(0.02f,player,{120,120,100,100},light,map,health,true);
     for(const auto& actor:physical.Actors())assert(actor.body.state!=Enemies::State::Chasing&&actor.body.state!=Enemies::State::WindingUp);
 }
 int main()
@@ -47,7 +47,7 @@ int main()
             Lighting::DungeonLight light(generated->layout);Exploration::Map chart(generated->layout);Enemies::Health hp;
             Enemies::PhysicalEnemies pool(generated->layout);pool.SetSeed(seed);
             const auto start=Dungeon::Exploration::Center(generated->layout.spawn);light.Update(start,{1,0});
-            pool.Update(0.02f,start,{start.x-64,start.y-64,128,128},light,chart,false,{1,0},hp);
+            pool.Update(0.02f,start,{start.x-64,start.y-64,128,128},light,chart,hp);
             int wizard=0,demon=0,near=100000,far=0;
             const auto distances=Maze::MeasureDistances(generated->layout);
             for(const auto& actor:pool.Actors())if(actor.active)

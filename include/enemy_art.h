@@ -101,12 +101,14 @@ public:
             && actor.timer > stats.recovery - 0.14f) ? 1 : 0;
         const Color tint = actor.hurt > 0 ? Color{255, 157, 146, 255} : WHITE;
         DrawEllipse(static_cast<int>(p.x), static_cast<int>(p.y), 11, 4, Fade({15,10,16,255}, alpha * 0.65f));
-        if(!physical.Draw(actor)) Draw(enemy.kind, p, (enemy.kind == Kind::Sentinel ? 43.0f : 36.0f) * (0.76f + 0.24f * alpha),
+        if(!physical.Draw(actor)) Draw(enemy.kind, p, (enemy.kind == Kind::Sentinel ? 43.0f * WizardVisualScale : 36.0f) * (0.76f + 0.24f * alpha),
              false, gait, enemy.facing.x < 0, dying ? (1 - alpha) * 26 : (intent * -8 + lunge * 13) * (enemy.facing.x < 0 ? -1 : 1), intent, Fade(tint, alpha));
         if (intent > 0)
         {
             const float start = std::atan2(enemy.facing.y, enemy.facing.x) * 57.29578f;
-            DrawRing(p, stats.reach - 2, stats.reach, start - 37, start + 37, 18,
+            const float half = PhysicalAttackHalfArc * RAD2DEG;
+            const float reach = stats.reach + PhysicalAttackTolerance;
+            DrawRing(p, reach - 2, reach, start - half, start + half, 18,
                      Fade(enemy.kind==Kind::Sentinel?Color{188,112,255,255}:Color{249,153,89,255}, 0.2f + 0.65f * intent));
         }
         if (actor.swung || (enemy.state == State::Recovering && actor.hurt <= 0 && actor.timer > stats.recovery - 0.16f))
@@ -118,7 +120,12 @@ public:
                 DrawPolyLinesEx(spell,6,11,actor.animationTime*90,1.5f,{218,148,255,220});
                 DrawCircleGradient(spell,13,{172,74,240,130},BLANK);
             }
-            else DrawRing(p, stats.reach - 6, stats.reach + 2, start - 44, start + 44, 20, {255, 181, 115, 185});
+            else
+            {
+                const float half = PhysicalAttackHalfArc * RAD2DEG;
+                const float reach = stats.reach + PhysicalAttackTolerance;
+                DrawRing(p, reach - 6, reach, start - half, start + half, 20, {255, 181, 115, 185});
+            }
         }
     }
 

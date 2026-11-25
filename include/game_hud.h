@@ -2,6 +2,7 @@
 #define SHADOW_HUNT_GAME_HUD_H
 
 #include "raylib.h"
+#include "gadget_art.h"
 #include <algorithm>
 #include <cmath>
 
@@ -86,40 +87,59 @@ inline void DrawHitFlash(int width, int height, float strength, bool angelDeath)
     DrawRectangleGradientV(0, height-h, width, h, BLANK, edge);
 }
 
-inline void DrawHealth(int width, int height, float scale, int points, int capacity, float shown)
+inline void DrawRun(int width, int height, float scale, int points, int capacity, float shown,
+                    const char* time, unsigned long long souls, unsigned long long gold, const Gadgets::Run& gadgets)
 {
-    const int size = Pixels(scale, 14);
-    const int pad = Pixels(scale, 8);
-    const int barHeight = Pixels(scale, 8);
-    const int stripWidth = Pixels(scale, 194);
-    const int stripHeight = size + barHeight + pad * 3;
-    const int x = width - stripWidth - pad * 2, y = height - stripHeight - pad * 2;
-    const Rectangle strip{float(x),float(y),float(stripWidth),float(stripHeight)};
+    constexpr float panelWidth = 291, panelHeight = 128;
+    const Camera2D layout{{width - (panelWidth + 14) * scale, height - (panelHeight + 14) * scale}, {0, 0}, 0, scale};
+    BeginMode2D(layout);
+    const Rectangle strip{0, 0, panelWidth, panelHeight};
     const float ratio = capacity > 0 ? float(points) / capacity : 0;
-    const bool low = ratio > 0 && ratio < 0.30f;
-    DrawRectangleRounded(strip, 0.20f, 4, {21,17,23,242});
-    DrawRectangleRoundedLines(strip, 0.20f, 4, low ? Color{163,68,58,255} : Border);
-    DrawText("Health", x+pad, y+pad, size, Gold);
-    const char* reading = TextFormat("%d/%d   %d%%", points, capacity, static_cast<int>(std::lround(ratio*100)));
-    DrawText(reading, x+stripWidth-pad-MeasureText(reading,size), y+pad, size, Text);
-    const int left = x + pad, top = y + size + 2*pad, barWidth = stripWidth-2*pad;
-    DrawRectangle(left,top,barWidth,barHeight,{59,25,33,255});
-    const int filled = static_cast<int>(barWidth * std::clamp(shown, 0.0f, 1.0f));
-    DrawRectangleGradientV(left,top,filled,barHeight,{224,93,83,255},{147,36,48,255});
-    DrawRectangleLines(left,top,barWidth,barHeight,{119,70,61,220});
-}
+    DrawRectangleRounded(strip, 0.12f, 5, {21, 17, 23, 242});
+    DrawRectangleRoundedLines(strip, 0.12f, 5, ratio > 0 && ratio < 0.30f ? Color{163, 68, 58, 255} : Border);
+    DrawText("Health", 12, 12, 14, Gold);
+    const char* reading = TextFormat("%d%%", static_cast<int>(std::lround(ratio * 100)));
+    DrawText(reading, 213 - MeasureText(reading, 14), 12, 14, Text);
+    DrawText(time, 278 - MeasureText(time, 16), 11, 16, Text);
+    DrawText("Time", 278 - MeasureText("Time", 12), 33, 12, DimText);
+    DrawRectangle(12, 33, 201, 8, {68, 32, 38, 255});
+    const int filled = static_cast<int>(201 * std::clamp(shown, 0.0f, 1.0f));
+    DrawRectangleGradientV(12, 33, filled, 8, {224, 93, 83, 255}, {147, 36, 48, 255});
+    DrawText(TextFormat("Gold %llu", gold), 12, 54, 14, Gold);
+    DrawText(TextFormat("Souls %llu", souls), 106, 54, 14, {155, 209, 196, 255});
+    const char* score = TextFormat("Score %llu", gold + souls);
+    DrawText(score, 278 - MeasureText(score, 14), 54, 14, Text);
+    DrawRectangle(12, 75, 266, 1, Border);
 
-inline void DrawRun(int width, int height, float scale, int rightInset, const char* time, unsigned long long souls,unsigned long long gold=0)
-{
-    const int size = Pixels(scale, 14), pad = Pixels(scale, 8);
-    const char* label = TextFormat("%s  Souls %llu  Gold %llu  Score %llu", time, souls,gold,souls+gold);
-    const int w = MeasureText(label,size) + pad*2 + size;
-    const float x = float(width - rightInset - w);
-    const float y = float(height - (size+pad*2) - pad*2);
-    DrawRectangleRounded({x,y,float(w),float(size+pad*2)},0.20f,4,{21,17,23,235});
-    DrawRectangleRoundedLines({x,y,float(w),float(size+pad*2)},0.20f,4,Border);
-    DrawPoly({x+pad+size*0.28f,y+pad+size*0.50f},4,size*0.28f,0,{120,215,201,255});
-    DrawText(label, int(x)+pad+size, int(y)+pad, size, Text);
+    const auto& feedback = gadgets.LastFeedback();
+    for (Gadgets::Type type : Gadgets::Types)
+    {
+        const int i = Gadgets::Index(type);
+        const int x = 12 + i * 137;
+        const int count = gadgets.Quantity(type);
+        const Rectangle icon{static_cast<float>(x), 83, 34, 34};
+        const bool flash = feedback.type == type && feedback.remaining > Gadgets::FeedbackSeconds - 0.39f
+            && feedback.message != Gadgets::Message::Empty;
+        DrawRectangleRounded(icon, 0.25f, 4, flash ? Color{68, 48, 42, 255} : KeyBackground);
+        DrawRectangleRoundedLines(icon, 0.25f, 4, flash ? Gold : Brass);
+        Gadgets::DrawIcon(type, {icon.x + 3, icon.y + 3}, 1.75f, count || flash ? 1.0f : 0.62f);
+        DrawText(Gadgets::Name(type), x + 42, 85, 13, Gold);
+        DrawText(TextFormat("%c  \xc3\x97 %d", i == 0 ? 'Q' : 'R', count), x + 42, 102, 13, count ? Text : DimText);
+    }
+
+    if (feedback.remaining > 0)
+    {
+        const bool empty = feedback.message == Gadgets::Message::Empty;
+        const char* message = empty
+            ? (feedback.type == Gadgets::Type::SmokeBomb ? "No Smoke Bombs remaining" : "No Soul Lures remaining")
+            : TextFormat("%s %s", Gadgets::Name(feedback.type), feedback.message == Gadgets::Message::Collected ? "collected" : "deployed");
+        const float alpha = std::min(1.0f, feedback.remaining * 3);
+        const int w = MeasureText(message, 14) + 20;
+        const Rectangle note{panelWidth - w, -30, static_cast<float>(w), 24};
+        DrawRectangleRounded(note, 0.22f, 4, Fade(Panel, alpha));
+        DrawText(message, static_cast<int>(note.x) + 10, -25, 14, Fade(empty ? Text : Gold, alpha));
+    }
+    EndMode2D();
 }
 
 inline void DrawControls(int width, int height, const char* footer)
@@ -129,6 +149,8 @@ inline void DrawControls(int width, int height, const char* footer)
         {"Move", "WASD / Arrow keys"},
         {"Facing melee attack", "Space"},
         {"Interact / hide / emerge", "E"},
+        {"Smoke Bomb / break sight", "Q"},
+        {"Soul Lure / distract foes", "R"},
         {"Exploration map", "M"},
         {"Mobcyclopedia", "B"},
         {"Toggle fullscreen", "F11"},

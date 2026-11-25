@@ -3,7 +3,9 @@
 
 #include "enemy_manager.h"
 #include "exploration_map.h"
+#include "gadgets.h"
 #include <cstdint>
+#include <utility>
 
 namespace Enemies
 {
@@ -31,6 +33,8 @@ constexpr int MinSpawnSteps = 21;
 constexpr float MinSpawnDistance = 9 * Maze::CellSize;
 constexpr float DeathDuration = 0.52f;
 constexpr float HitReaction = 0.23f;
+constexpr float PhysicalAttackHalfArc = 0.90f;
+constexpr float PhysicalAttackTolerance = 4.0f;
 constexpr int PhysicalAttackImpactFrame=4; // Inspected Wizard/Demon attack sheets.
 inline float AttackFollowThrough(Kind kind)
 {
@@ -38,8 +42,14 @@ inline float AttackFollowThrough(Kind kind)
     return Stats(kind).windup*(frames-PhysicalAttackImpactFrame)/PhysicalAttackImpactFrame;
 }
 
+inline float CombatSpacing(const Enemy& enemy)
+{
+    return Movement::CollisionHalfSize + enemy.radius;
+}
+
 struct PhysicalEnemy
 {
+    struct RejectedLure { int start = NoCell, goal = NoCell; };
     Enemy body{Kind::Sentinel, SentinelStats.speed, AngelRadius};
     bool active = false;
     int health = 0;
@@ -48,6 +58,10 @@ struct PhysicalEnemy
     float hurt = 0;
     bool swung = false;
     bool struck = false;
+    bool startedWindup = false;
+    bool hitThisSwing = false;
+    int lureGoal = NoCell;
+    std::array<RejectedLure, Gadgets::LurePickupCount> rejectedLures{};
     float animationTime=0;
     float attackVisual=0;
     bool mirrored=false;
@@ -74,23 +88,36 @@ public:
     const auto& Actors() const { return actors; }
 
     void Update(float dt, Vector2 player, const Rectangle& viewport, const Lighting::DungeonLight& light,
-                const Exploration::Map& exploration, bool swing, Vector2 facing, Health& health, bool hidden=false)
+                const Exploration::Map& exploration, Health& health, bool hidden = false,
+                const MeleeFrame& melee = {}, const Gadgets::Run* gadgets = nullptr)
     {
         const bool sheltered = InEntrance(level, CellAt(CellAt(player)));
+        const bool obscured = gadgets && gadgets->Obscures(level, player);
         int pursuers = 0;
         for (const auto& actor : actors) pursuers += Pursuing(actor);
         for (auto& actor : actors)
         {
-            actor.swung = actor.struck = false;
-            if (!actor.active) continue;
+            actor.swung = actor.struck = actor.startedWindup = false;
+            if (!actor.active || health.Dead()) continue;
             actor.body.traveled = 0;
             const bool wasPursuing = Pursuing(actor);
-            if (swing && !sheltered) Strike(actor, player, facing);
-            Tick(actor, player, sheltered, wasPursuing || pursuers < ActivePursuitCap, dt, health,hidden);
+            if (melee.started) actor.hitThisSwing = false;
+            const bool canHit = melee.active && !sheltered && !hidden && actor.health > 0 && !actor.hitThisSwing;
+            const Vector2 before = actor.body.position;
+            if (canHit && (MeleeTouches(level, melee.from, melee.direction, melee.firstAge, before, actor.body.radius)
+                || (actor.body.state == State::WindingUp
+                    && SweptMeleeTouches(level, melee, before, before, actor.body.radius))))
+                Strike(actor);
+            Tick(actor, player, sheltered, wasPursuing || pursuers < ActivePursuitCap,
+                 dt, health, hidden, obscured, gadgets);
+            if (canHit && !actor.hitThisSwing && !health.Dead()
+                && SweptMeleeTouches(level, melee, before, actor.body.position, actor.body.radius))
+                Strike(actor);
             actor.animationTime=std::fmod(actor.animationTime+dt,60.0f);
             if(std::fabs(actor.body.facing.x)>0.01f) actor.mirrored=actor.body.facing.x<0;
             pursuers += static_cast<int>(Pursuing(actor)) - wasPursuing;
         }
+        if (health.Dead()) return;
         if (!populated)
         {
             Populate(player, viewport, light, exploration);
@@ -99,7 +126,7 @@ public:
             return;
         }
         spawnClock -= dt;
-        if (spawnClock > 0 || health.Dead()) return;
+        if (spawnClock > 0) return;
         Replace(player, viewport, light, exploration);
         ResetSpawnClock();
     }
@@ -111,7 +138,14 @@ public:
                 return true;
         return false;
     }
-    void InvalidateRoutes() { for(auto& actor:actors) actor.body.lastGoal=NoCell; }
+    void InvalidateRoutes()
+    {
+        for (auto& actor : actors)
+        {
+            actor.body.lastGoal = NoCell;
+            actor.rejectedLures = {};
+        }
+    }
 
 private:
     static bool Pursuing(const PhysicalEnemy& actor)
@@ -201,11 +235,11 @@ private:
         return true;
     }
 
-    void Strike(PhysicalEnemy& actor, Vector2 player, Vector2 facing) const
+    static void Strike(PhysicalEnemy& actor)
     {
-        if (actor.health <= 0 || !InAttackArc(player, facing, actor.body.position, MeleeReach, MeleeHalfArc)
-            || !Maze::HasLineOfSight(level, player, actor.body.position)) return;
         actor.struck = true;
+        actor.hitThisSwing = true;
+        actor.startedWindup = false;
         actor.attackVisual=0;
         --actor.health;
         actor.hurt = HitReaction;
@@ -213,21 +247,141 @@ private:
         actor.timer = actor.health == 0 ? DeathDuration : HitReaction;
     }
 
-    void Navigate(Enemy& body, int goal, float dt) const
+    static int RouteStart(const Enemy& body)
+    {
+        // Finish the current cardinal edge before turning toward a new goal.
+        return body.route.Remaining() ? body.route.cells[body.route.next] : CellAt(body.position);
+    }
+
+    void PlanRoute(Enemy& body, int start, int goal, Route& route) const
+    {
+        if (body.kind == Kind::Sentinel) FindSentinelRoute(level, start, goal, route, body.home, WizardLeash);
+        else FindFloorRoute(level, start, goal, route, body.home,
+            [&](int, int, Maze::Cell cell) { return InEntrance(level, cell); }, DemonLeash);
+    }
+
+    // Limit forward travel at the first point the enemy's footprint would
+    // overlap the player, including on a long frame.
+    static float ApproachTime(const Enemy& body, Vector2 waypoint, Vector2 player, float dt)
+    {
+        const Vector2 heading{waypoint.x - body.position.x, waypoint.y - body.position.y};
+        const float length = std::hypot(heading.x, heading.y);
+        if (length <= 0) return dt;
+        const Vector2 toward{(player.x - body.position.x), (player.y - body.position.y)};
+        const float projection = (toward.x * heading.x + toward.y * heading.y) / length;
+        const float radius = CombatSpacing(body);
+        const float tangentSquared = std::max(0.0f, DistanceSquared(player, body.position) - projection * projection);
+        if (projection <= 0 || tangentSquared >= radius * radius) return dt;
+        const float contact = projection - std::sqrt(radius * radius - tangentSquared);
+        return std::min(dt, std::max(0.0f, contact) / body.speed);
+    }
+
+    void Navigate(Enemy& body, int goal, float dt, const Vector2* player = nullptr) const
     {
         if (goal != body.lastGoal)
         {
-            // Finish the current cardinal edge before turning toward a new goal.
-            const int start = body.route.Remaining() ? body.route.cells[body.route.next] : CellAt(body.position);
-            if (body.kind == Kind::Sentinel) FindSentinelRoute(level, start, goal, body.route, body.home,WizardLeash);
-            else FindFloorRoute(level, start, goal, body.route, body.home,
-                [&](int, int, Maze::Cell cell) { return InEntrance(level, cell); },DemonLeash);
+            PlanRoute(body, RouteStart(body), goal, body.route);
             body.lastGoal = goal;
+        }
+        if (player && body.route.Remaining())
+        {
+            int index = body.route.next;
+            if (DistanceSquared(body.position, Center(body.route.cells[index])) == 0) ++index;
+            if (index < body.route.length)
+                dt = ApproachTime(body, Center(body.route.cells[index]), *player, dt);
         }
         FollowWaypoint(body, dt);
     }
 
-    void Tick(PhysicalEnemy& actor, Vector2 player, bool sheltered, bool mayPursue, float dt, Health& health,bool hidden) const
+    bool MakeSpace(Enemy& body, Vector2 player, float leash, float dt) const
+    {
+        const float distance = DistanceSquared(body.position, player);
+        const float separation = CombatSpacing(body);
+        if (distance + 0.01f >= separation * separation || dt <= 0) return false;
+        const Vector2 origin = body.position;
+        const float step = std::min(body.speed * 0.65f * dt, separation - std::sqrt(distance));
+        Vector2 best = origin;
+        // Use the existing wall and furniture sweeps for this short recovery
+        // step. A side step is possible when the direct retreat is blocked.
+        for (const auto direction : Maze::Directions)
+        {
+            Vector2 point = origin;
+            if (direction.column)
+                point.x = Movement::SweepAxis(level, origin.x, origin.y, direction.column * step, true);
+            else
+                point.y = Movement::SweepAxis(level, origin.y, origin.x, direction.row * step, false);
+            if (InEntrance(level, CellAt(CellAt(point)))
+                || DistanceSquared(point, body.home) > leash * leash
+                || DistanceSquared(point, player) <= DistanceSquared(best, player)) continue;
+            best = point;
+        }
+        if (DistanceSquared(origin, best) == 0) return false;
+        MoveToward(body, best, dt);
+        // A side step can leave the old cardinal edge. Replan from the
+        // current cell before following any prior waypoint.
+        body.route.next = body.route.length = 0;
+        body.lastGoal = NoCell;
+        return true;
+    }
+
+    bool FollowLure(PhysicalEnemy& actor, const Gadgets::Run* gadgets, float leash, float dt) const
+    {
+        auto& body = actor.body;
+        if (gadgets)
+        {
+            const auto& lures = gadgets->Lures();
+            const int start = RouteStart(body);
+            while (true)
+            {
+                int best = -1;
+                float bestDistance = std::numeric_limits<float>::max();
+                for (int i = 0; i < static_cast<int>(lures.size()); ++i)
+                {
+                    const auto& lure = lures[i];
+                    if (lure.remaining <= 0) continue;
+                    const int cell = CellAt(lure.position);
+                    const auto& rejected = actor.rejectedLures[i];
+                    const float distance = DistanceSquared(body.position, lure.position);
+                    if (distance > bestDistance || cell == NoCell || InEntrance(level, CellAt(cell))
+                        || (cell != actor.lureGoal && distance > Gadgets::LureRadius * Gadgets::LureRadius)
+                        || DistanceSquared(body.home, Center(cell)) > leash * leash
+                        || (start == rejected.start && cell == rejected.goal)) continue;
+                    best = i;
+                    bestDistance = distance;
+                }
+                if (best < 0) break;
+                const int goal = CellAt(lures[best].position);
+                if (goal != actor.lureGoal || goal != body.lastGoal)
+                {
+                    Route route;
+                    route.searches = body.route.searches;
+                    PlanRoute(body, start, goal, route);
+                    if (route.length == 0)
+                    {
+                        actor.rejectedLures[best] = {start, goal};
+                        body.route.searches = route.searches;
+                        continue;
+                    }
+                    body.route = std::move(route);
+                    body.lastGoal = goal;
+                }
+                actor.lureGoal = goal;
+                body.state = State::Investigating;
+                body.memory = std::max(0.0f, body.memory - dt);
+                FollowWaypoint(body, dt);
+                return true;
+            }
+        }
+        if (actor.lureGoal != NoCell)
+        {
+            actor.lureGoal = NoCell;
+            body.lastGoal = NoCell;
+        }
+        return false;
+    }
+
+    void Tick(PhysicalEnemy& actor, Vector2 player, bool sheltered, bool mayPursue, float dt,
+              Health& health, bool hidden, bool obscured, const Gadgets::Run* gadgets) const
     {
         Enemy& body = actor.body;
         ++body.updates;
@@ -239,7 +393,6 @@ private:
             if (actor.timer == 0) actor.active = false;
             return;
         }
-        if (health.Dead()) return;
         const auto& stats = Stats(body.kind);
         const bool stalker = body.kind == Kind::Stalker;
         const float distance = DistanceSquared(body.position, player);
@@ -251,7 +404,8 @@ private:
             if (actor.timer > 0) return;
             actor.swung = true;
             actor.attackVisual=AttackFollowThrough(body.kind);
-            if (sight && InAttackArc(body.position, body.facing, player, stats.reach + 4, 0.9f))
+            if (sight && InAttackArc(body.position, body.facing, player,
+                                     stats.reach + PhysicalAttackTolerance, PhysicalAttackHalfArc))
                 health.Hit(body.kind);
             body.state = State::Recovering;
             actor.timer = stats.recovery;
@@ -259,15 +413,19 @@ private:
         }
         if ((body.state == State::Dormant || body.state == State::Recovering) && actor.timer > 0) return;
 
-        const bool tracking = sight && distance <= stats.detection * stats.detection;
+        if (FollowLure(actor, gadgets, leash, dt)) return;
+
+        const bool tracking = sight && !obscured && distance <= stats.detection * stats.detection;
+        const bool inReach = sight && distance <= stats.reach * stats.reach;
         body.memory = tracking ? DisengageSeconds : std::max(0.0f, body.memory - dt);
-        if (mayPursue && canTrack && (tracking || ((body.state == State::Chasing || body.state==State::Investigating) && body.memory > 0)) && !(stalker && body.state == State::Returning && actor.burst <= 0 && actor.timer > 0))
+        if (mayPursue && canTrack && (tracking || inReach || ((body.state == State::Chasing || body.state==State::Investigating) && body.memory > 0)) && !(stalker && body.state == State::Returning && actor.burst <= 0 && actor.timer > 0))
         {
             if (body.state != State::Chasing) actor.burst = StalkerBurst;
             body.state = tracking?State::Chasing:State::Investigating;
             if (tracking) body.target = player;
-            if (tracking && distance <= stats.reach * stats.reach)
+            if (inReach)
             {
+                if (MakeSpace(body, player, leash, dt)) return;
                 if (distance > 0)
                 {
                     const float length = std::sqrt(distance);
@@ -275,12 +433,13 @@ private:
                 }
                 body.state = State::WindingUp;
                 actor.timer = stats.windup;
+                actor.startedWindup = true;
                 return;
             }
             actor.burst -= dt;
             if (!stalker || actor.burst > 0)
             {
-                Navigate(body, CellAt(body.target), dt);
+                Navigate(body, CellAt(body.target), dt, sight ? &player : nullptr);
                 return;
             }
             actor.timer = stats.recovery;

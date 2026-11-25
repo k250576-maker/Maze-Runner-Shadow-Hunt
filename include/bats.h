@@ -2,6 +2,7 @@
 #define SHADOW_HUNT_BATS_H
 
 #include "enemy_pathfinding.h"
+#include "player_movement.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -9,35 +10,27 @@
 namespace Bats
 {
 constexpr int Capacity = 14;
-constexpr float WakeRange = 10 * Maze::CellSize;
-constexpr float FlightSeconds = 0.76f;
 constexpr float WingFramesPerSecond = 10.0f;
+constexpr float WanderRadius = 4 * Maze::CellSize;
+constexpr float StallSeconds = 0.75f;
 
 struct Bat
 {
-    int perch = Enemies::NoCell;
+    int home = Enemies::NoCell;
+    int cell = Enemies::NoCell;
+    int previous = Enemies::NoCell;
     int destination = Enemies::NoCell;
-    float nap = 0;
-    float flight = 0;
+    Vector2 ground{}, target{}, progressAnchor{};
     float wing = 0;
+    float cruise = 0, speed = 0, stalled = 0;
+    std::uint32_t random = 0;
     bool left = false;
 
-    Vector2 Ground() const
-    {
-        const Vector2 start = Enemies::Center(perch);
-        if (destination == Enemies::NoCell) return start;
-        const Vector2 end = Enemies::Center(destination);
-        float progress = std::clamp(flight / FlightSeconds, 0.0f, 1.0f);
-        progress=progress*progress*(3-2*progress);
-        return Enemies::PointAlong(start,end,progress);
-    }
+    Vector2 Ground() const { return ground; }
     Vector2 Position() const
     {
-        Vector2 center=Ground();
-        const float progress=destination==Enemies::NoCell?0:std::clamp(flight/FlightSeconds,0.0f,1.0f);
-        const float arc=std::sin(progress * 3.1415927f);
-        center.y -= 9 + 5 * arc * arc; // Ease vertical takeoff/landing too.
-        return center;
+        return {ground.x + 1.4f * std::sin(wing * (2 * PI / 1.5f)),
+                ground.y - 8 + 2.3f * std::sin(wing * (2 * PI / 1.25f))};
     }
 };
 
@@ -49,9 +42,9 @@ public:
 
     void Place(std::uint32_t seed)
     {
-        random = seed ^ 0xD6E8FEB8u;
+        std::uint32_t random = seed ^ 0xD6E8FEB8u;
         bats = {};
-        const int start = static_cast<int>(Next() % Enemies::CellCount);
+        const int start = static_cast<int>(Next(random) % Enemies::CellCount);
         int count = 0;
         for (int i = 0; i < Enemies::CellCount && count < Capacity; ++i)
         {
@@ -62,75 +55,136 @@ public:
             bool near = false;
             constexpr float spacing = 7 * Maze::CellSize;
             for (int j = 0; j < count; ++j)
-                near |= Enemies::DistanceSquared(p,Enemies::Center(bats[j].perch)) < spacing * spacing;
+                near |= Enemies::DistanceSquared(p, Enemies::Center(bats[j].home)) < spacing * spacing;
             if (near) continue;
-            bats[count++] = {id, Enemies::NoCell, 0.5f + (Next() % 30) / 10.0f,0,(Next()%60)/10.0f};
+            Bat bat;
+            bat.home = bat.cell = id;
+            bat.ground = bat.progressAnchor = p;
+            bat.random = Next(random);
+            bat.wing = (Next(random) % 60) / 10.0f;
+            bat.cruise = 28 + Next(random) % 14;
+            Plan(bat);
+            if (bat.destination != Enemies::NoCell) bats[count++] = bat;
         }
     }
 
-    void Update(float dt, Vector2 player)
+    void Update(float dt)
     {
-        if(dt<=0) return;
+        if (dt <= 0) return;
         for (auto& bat : bats)
         {
-            if (bat.perch == Enemies::NoCell) continue;
-            // Animation is independent of lighting and wake distance. Finish
-            // flights even if the player walks away; never freeze in mid-air.
-            bat.wing=std::fmod(bat.wing+dt,60.0f);
-            float remaining=dt;
-            while(remaining>0)
+            if (bat.cell == Enemies::NoCell) continue;
+            bat.wing = std::fmod(bat.wing + dt, 60.0f);
+            float remaining = dt;
+            while (remaining > 0)
             {
-            const Vector2 base = Enemies::Center(bat.perch);
-            const float distance = Enemies::DistanceSquared(base,player);
-            if (bat.destination != Enemies::NoCell)
-            {
-                const float elapsed=std::min(remaining,FlightSeconds-bat.flight);
-                bat.flight += elapsed;
-                remaining-=elapsed;
-                if (bat.flight >= FlightSeconds)
+                if (bat.destination == Enemies::NoCell || !Walkable(bat.destination))
+                    Plan(bat, bat.destination);
+                if (bat.destination == Enemies::NoCell) break;
+
+                const float distance = std::sqrt(Enemies::DistanceSquared(bat.ground, bat.target));
+                const float travelTime = distance / bat.speed;
+                if (travelTime > remaining)
                 {
-                    bat.perch = bat.destination;
-                    bat.destination = Enemies::NoCell;
-                    bat.flight=0;
-                    bat.nap = 1.5f + (Next() % 26) / 10.0f;
+                    bat.ground = Enemies::PointAlong(bat.ground, bat.target, remaining / travelTime);
+                    break;
                 }
-                continue;
+                bat.ground = bat.target;
+                remaining -= travelTime;
+                if (bat.cell != bat.destination)
+                {
+                    bat.previous = bat.cell;
+                    bat.cell = bat.destination;
+                }
+                Plan(bat);
             }
-            if(distance>WakeRange*WakeRange) break; // Far-away perched bats rest intentionally.
-            const bool startled = distance < 54 * 54 && bat.nap < 2.0f
-                && Maze::HasLineOfSight(level,player,base);
-            if(!startled)
+            if (Enemies::DistanceSquared(bat.progressAnchor, bat.ground) >= 4.0f)
             {
-                const float elapsed=std::min(remaining,bat.nap);
-                bat.nap-=elapsed; remaining-=elapsed;
-                if(bat.nap>0) break;
+                bat.progressAnchor = bat.ground;
+                bat.stalled = 0;
             }
-            bat.nap = 2.5f;
-            const unsigned offset = Next() % 4;
-            float farthest = startled ? distance : -1.0f;
-            for (unsigned i = 0; i < 4; ++i)
+            else if ((bat.stalled += dt) >= StallSeconds)
             {
-                const auto cell = Maze::Neighbor(Enemies::CellAt(bat.perch), (i+offset)%4);
-                if (!level.IsWalkable(cell.column,cell.row) || Enemies::InEntrance(level,cell)) continue;
-                const int id = Enemies::CellId(cell);
-                const float nextDistance = Enemies::DistanceSquared(Enemies::Center(id),player);
-                if (nextDistance <= farthest) continue;
-                bat.destination = id;
-                farthest = nextDistance;
-                if (!startled) break;
-            }
-            if (bat.destination == Enemies::NoCell) break;
-            bat.left = Enemies::Center(bat.destination).x < base.x;
-            bat.flight = 0;
+                Plan(bat, bat.destination);
+                bat.progressAnchor = bat.ground;
+                bat.stalled = 0;
             }
         }
     }
 
 private:
-    std::uint32_t Next() { return random = random * 1664525u + 1013904223u; }
+    static std::uint32_t Next(std::uint32_t& random) { return random = random * 1664525u + 1013904223u; }
+
+    bool Walkable(int id) const
+    {
+        if (id == Enemies::NoCell) return false;
+        const auto cell = Enemies::CellAt(id);
+        return level.IsWalkable(cell.column, cell.row) && !Enemies::InEntrance(level, cell);
+    }
+
+    bool ClearLane(Vector2 from, Vector2 to) const
+    {
+        const bool horizontal = from.y == to.y;
+        const float start = horizontal ? from.x : from.y;
+        const float end = horizontal ? to.x : to.y;
+        return Maze::HasLineOfSight(level, from, to)
+            && Movement::SweepAxis(level, start, horizontal ? from.y : from.x, end - start, horizontal) == end;
+    }
+
+    void BeginLeg(Bat& bat, int cell, Vector2 target) const
+    {
+        bat.destination = cell;
+        bat.target = target;
+        bat.speed = bat.cruise * (0.90f + (Next(bat.random) >> 24) / 1275.0f);
+        if (target.x != bat.ground.x) bat.left = target.x < bat.ground.x;
+    }
+
+    void Plan(Bat& bat, int rejected = Enemies::NoCell) const
+    {
+        bat.destination = Enemies::NoCell;
+        if (!Walkable(bat.cell)) return;
+        const auto center = Enemies::Center(bat.cell);
+        if (Enemies::DistanceSquared(bat.ground, center) > 0.001f)
+        {
+            // Return along the same legal edge before choosing another turn.
+            // This also lets a bat back out if the destination closed mid-leg.
+            BeginLeg(bat, bat.cell, center);
+            return;
+        }
+
+        int best = Enemies::NoCell, bestScore = -1;
+        for (int d = 0; d < 4; ++d)
+        {
+            const auto adjacent = Maze::Neighbor(Enemies::CellAt(bat.cell), d);
+            if (!Maze::Contains(adjacent.column, adjacent.row)) continue;
+            const int next = Enemies::CellId(adjacent);
+            const auto point = Enemies::Center(next);
+            if (next == rejected || !Walkable(next)
+                || Enemies::DistanceSquared(Enemies::Center(bat.home), point) > WanderRadius * WanderRadius
+                || !ClearLane(center, point)) continue;
+            const int score = static_cast<int>((Next(bat.random) >> 24) % 16) + (next == bat.previous ? 0 : 16);
+            if (score > bestScore) { best = next; bestScore = score; }
+        }
+        if (best != Enemies::NoCell)
+        {
+            BeginLeg(bat, best, Enemies::Center(best));
+            return;
+        }
+
+        // A temporarily isolated floor tile still leaves room to flutter.
+        const unsigned offset = Next(bat.random) >> 30;
+        for (unsigned i = 0; i < 4; ++i)
+        {
+            const auto direction = Maze::Directions[(i + offset) % 4];
+            const Vector2 target{center.x + direction.column * 6, center.y + direction.row * 6};
+            if (!ClearLane(center, target)) continue;
+            BeginLeg(bat, bat.cell, target);
+            return;
+        }
+    }
+
     const Maze::Layout& level;
     std::array<Bat,Capacity> bats{};
-    std::uint32_t random = 0;
 };
 
 class Art
@@ -156,12 +210,13 @@ public:
     {
         for (const auto& bat : flock.Actors())
         {
-            if (bat.perch == Enemies::NoCell) continue;
+            if (bat.cell == Enemies::NoCell) continue;
             const Vector2 ground = bat.Ground();
-            const Vector2 p = bat.Position();
+            const Vector2 air = bat.Position();
+            const Vector2 p = Maze::HasLineOfSight(level, ground, air) ? air : ground;
             // Use the floor anchor for occlusion. The flight is purely decorative.
             if (!CheckCollisionPointRec(p,visible) || !Maze::HasLineOfSight(level,player,ground)) continue;
-            const int frame = bat.destination == Enemies::NoCell ? 1 : static_cast<int>(bat.wing * WingFramesPerSecond) % 2;
+            const int frame = static_cast<int>(bat.wing * WingFramesPerSecond) % 2;
             if (!IsTextureValid(texture))
             {
                 DrawFallback(p, frame);

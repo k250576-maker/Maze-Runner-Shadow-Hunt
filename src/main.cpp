@@ -151,7 +151,7 @@ void DrawInteractionPrompt(const char* prompt,const Viewport& view)
     const int lines=second.empty()?1:2;
     const int width=std::min(view.width-24,std::max(MeasureText(first.c_str(),size),MeasureText(second.c_str(),size))+28);
     const int height=lines*(size+6)+16;
-    const Rectangle panel{(view.width-width)/2.0f,static_cast<float>(view.height-100-height),static_cast<float>(width),static_cast<float>(height)};
+    const Rectangle panel{(view.width-width)/2.0f,static_cast<float>(view.height-Hud::Pixels(view.hudScale, 177)-height),static_cast<float>(width),static_cast<float>(height)};
     DrawRectangleRounded(panel,0.18f,5,{12,10,15,235});
     DrawRectangleRoundedLines(panel,0.18f,5,Hud::Brass);
     Hud::DrawCenteredText(first.c_str(),view.width/2,static_cast<int>(panel.y)+8,size,Hud::Gold);
@@ -165,22 +165,23 @@ void DrawMelee(const Maze::Layout& level, Vector2 player, const Enemies::Melee& 
     const float facing = std::atan2(attack.direction.y, attack.direction.x);
     const unsigned char alpha = static_cast<unsigned char>(210 * (1 - progress));
     const Color tint{255, 216, 141, alpha};
-    const float end = std::min(1.0f, -0.7f + 2.4f * progress);
-    const float start = std::max(-1.0f, end - 0.92f);
+    const float age = Enemies::MeleeEffect - attack.effect;
+    const auto arc = Enemies::SwingArc(age);
+    const Color sweep{255, 216, 141, static_cast<unsigned char>(age < Enemies::MeleeActiveTime ? alpha / 6 : 0)};
     Vector2 previousInner{}, previousOuter{};
     constexpr int segments = 14;
     for (int i = 0; i <= segments; ++i)
     {
         const float t = float(i) / segments;
-        const float angle = facing + (start + (end-start)*t) * Enemies::MeleeHalfArc;
+        const float angle = facing + arc.first + (arc.last - arc.first) * t;
         const Vector2 direction{std::cos(angle), std::sin(angle)};
-        const float wall = Maze::FirstWallDistance(level, player, direction, Enemies::MeleeReach);
-        const float reach = std::clamp(wall - 1, 0.0f, Enemies::MeleeReach);
+        const float reach = Enemies::SwingReach(level, player, direction);
         const float inner = reach * (1 - 0.25f * std::sin(3.1415927f * t));
         const Vector2 a{player.x + direction.x*inner, player.y + direction.y*inner};
         const Vector2 b{player.x + direction.x*reach, player.y + direction.y*reach};
         if (i > 0)
         {
+            if (sweep.a > 0) DrawTriangle(player, b, previousOuter, sweep);
             DrawTriangle(previousInner, b, previousOuter, tint);
             DrawTriangle(previousInner, a, b, tint);
         }
@@ -257,6 +258,7 @@ struct PlaySession
     Run::Souls             souls;
     Escape::Objective      escape;
     Dungeon::Exploration   dungeon;
+    Gadgets::Run           gadgets;
     unsigned               defeated=0;
     int                    victoryChoice=0;
     float                  shownHealth = 1;
@@ -296,6 +298,8 @@ struct PlaySession
         if (!dungeon.Initialize(generatedSeed)) return false;
         escape.SetUnlocked(false);
         if (!enemies.Spawn())       return false;
+        gadgets.Place(generated, dungeon, generatedSeed,
+            {Enemies::CellAt(enemies.Angel().home), Enemies::CellAt(enemies.Ghost().home)});
         if (!light.Initialize())    return false;
         if (!torches.Load(assetRoot)) { light.Unload(); return false; }
         player        = {Movement::Center(generated.layout.spawn)};
@@ -413,6 +417,8 @@ int main(int argc, char* argv[])
     Bats::Art batArt;
     batArt.Load(root);
     Dungeon::Art explorationArt;explorationArt.Load(root);
+    Gadgets::Art gadgetArt;
+    gadgetArt.Load(root);
     Mobcyclopedia::Type bookType;
     bookType.Load();
     MenuBackdrop::Castle menuBackdrop;
@@ -480,6 +486,7 @@ int main(int argc, char* argv[])
         if (appState == AppState::Menu)
         {
             menuState.time += dt;
+            menuBackdrop.UpdateEyes(dt);
             if(menuState.overlay==MainMenu::Overlay::Settings)
             {
                 if(settingsInput())menuState.overlay=MainMenu::Overlay::None;
@@ -543,6 +550,11 @@ int main(int argc, char* argv[])
                 if (session->deathChoice == GameOver::Choice::Menu)
                 {
                     returnToMenu(view);
+                    continue;
+                }
+                if (session->deathChoice == GameOver::Choice::Quit)
+                {
+                    quitRequested = true;
                     continue;
                 }
                 if (auto restarted = StartSession(root, seed))
@@ -652,6 +664,8 @@ int main(int argc, char* argv[])
         {
             auto& exploration=session->dungeon;
             exploration.Update(dt);
+            session->gadgets.Update(dt);
+            const bool wasHidden = exploration.hidden;
             if(!exploration.hidden)
             {
                 const auto oldGold=exploration.gold;
@@ -682,6 +696,17 @@ int main(int argc, char* argv[])
                     }
                 }
             }
+            if (!exploration.hidden)
+            {
+                if (session->gadgets.Collect(level, playerPos)) audio.PlayGadget(GameAudio::Cue::GadgetPickup);
+                if (!wasHidden && !UI::keysBlocked)
+                {
+                    if (IsKeyPressed(KEY_Q) && session->gadgets.Deploy(Gadgets::Type::SmokeBomb, level, playerPos))
+                        audio.PlayGadget(GameAudio::Cue::SmokeDeploy);
+                    if (IsKeyPressed(KEY_R) && session->gadgets.Deploy(Gadgets::Type::SoulLure, level, playerPos))
+                        audio.PlayGadget(GameAudio::Cue::LureDeploy);
+                }
+            }
         }
         session->light.SetObserverEnabled(!session->dungeon.hidden);
         if(!overlayOpen) session->exploration.Visit(playerCell);
@@ -695,16 +720,18 @@ int main(int argc, char* argv[])
         const Rectangle visible = VisibleDungeon(view, camera);
         GameAudio::EnemyAudio cues;
         bool quiet = false;
+        if (overlayOpen) session->melee.buffered = false;
         if (!overlayOpen)
         {
-            session->bats.Update(dt, playerPos);
+            session->bats.Update(dt);
             const Vector2 facing = FacingVector(session->player.facing);
-            const bool swing = session->melee.Update(dt, !session->dungeon.hidden && !wasOverlayOpen && !UI::keysBlocked && IsKeyPressed(KEY_SPACE), facing);
+            const auto melee = session->melee.Update(dt, IsKeyPressed(KEY_SPACE), facing,
+                {previous.x, previous.y}, playerPos, !session->dungeon.hidden && !UI::keysBlocked);
             session->enemyAnimation = std::fmod(session->enemyAnimation + dt, 1.0f);
             const int previousHealth = session->health.points;
             session->enemies.Update(dt, {previous.x, previous.y}, playerPos, session->light, session->health,session->dungeon.hidden);
             session->physical.Update(dt, playerPos, visible, session->light, session->exploration,
-                                     swing, facing, session->health,session->dungeon.hidden);
+                                     session->health, session->dungeon.hidden, melee, &session->gadgets);
             const auto distanceTo = [&](const Enemies::Enemy& enemy) {
                 return std::sqrt(Enemies::DistanceSquared(playerPos, enemy.position));
             };
@@ -716,6 +743,8 @@ int main(int argc, char* argv[])
             {
                 if (!actor.active) continue;
                 const float distance = distanceTo(actor.body);
+                if (actor.body.kind == Enemies::Kind::Sentinel && actor.startedWindup)
+                    cues.wizardDistance = std::min(cues.wizardDistance, distance);
                 if (actor.body.traveled > 0) cues.Movement(actor.body.kind, distance);
                 if (actor.swung) cues.Action(actor.body.kind == Enemies::Kind::Sentinel ?
                                             GameAudio::Cue::Sword : GameAudio::Cue::Lunge, distance);
@@ -731,7 +760,12 @@ int main(int argc, char* argv[])
                 }
             }
             if (!session->health.Dead() && session->souls.Collect(level, playerPos, session->clock.elapsed)) audio.CollectSoul();
-            if (session->health.points < previousHealth) audio.Damage(session->health.lastHit);
+            if (session->health.Dead())
+            {
+                UI::ScreenChanged();
+                audio.PlayDefeat();
+            }
+            else if (session->health.points < previousHealth) audio.Damage(session->health.lastHit);
             if(session->dungeon.hidden && (ghost.state==Enemies::State::Chasing || ghost.windup>0 || session->health.points<previousHealth))session->dungeon.WarnGhost();
             quiet = !session->health.Dead() && session->melee.cooldown == 0
                 && session->health.flash == 0 && !session->physical.Dangerous()
@@ -740,13 +774,13 @@ int main(int argc, char* argv[])
             if(session->escape.TryComplete({previous.x,previous.y},playerPos,!session->health.Dead(),
                 {session->clock.seed,session->clock.elapsed,session->souls.Total(),session->health.points,session->defeated,session->dungeon.gold}))
             {
-                UI::ScreenChanged(); audio.SetPaused(true); audio.PlayVictory();
+                UI::ScreenChanged(); audio.PlayVictory();
             }
         }
 
         const float actualHealth = float(session->health.points) / Enemies::StartingHealth;
         if(!overlayOpen) session->shownHealth = std::max(actualHealth, session->shownHealth - dt * 1.8f);
-        audio.SetPaused(overlayOpen || session->escape.Completed());
+        audio.SetPaused(overlayOpen || session->health.Dead() || session->escape.Completed());
         audio.Update(moved, quiet, cues);
         BeginDrawing();
         ClearBackground(HudBackground);
@@ -756,6 +790,7 @@ int main(int argc, char* argv[])
             DungeonArt::Draw(dungeonTex, level, visible, Lighting::AmbientMaskColor);
             session->escape.Draw(dungeonTex,session->clock.elapsed);
             explorationArt.Draw(session->dungeon,visible);
+            gadgetArt.DrawPickups(session->gadgets, level, playerPos, visible, static_cast<float>(session->clock.elapsed));
             for (const auto* e : {&session->enemies.Angel(), &session->enemies.Ghost()})
             {
                 if (!e->discovered || !CheckCollisionPointRec(e->position, visible)
@@ -769,10 +804,16 @@ int main(int argc, char* argv[])
                 enemySprites.DrawPhysical(actor);
             }
             batArt.Draw(session->bats, level, playerPos, visible);
+            gadgetArt.DrawEffects(session->gadgets, level, playerPos, visible);
             session->torches.DrawBrackets();
             session->light.DrawDarkness();
             session->escape.DrawLabel(playerPos);
             DrawSouls(session->souls, visible, playerPos, level, session->clock.elapsed);
+            for (const auto& actor : session->physical.Actors())
+                if (actor.active && (actor.struck || actor.hurt > 0)
+                    && CheckCollisionPointRec(actor.body.position, visible)
+                    && Maze::HasLineOfSight(level, playerPos, actor.body.position))
+                    gadgetArt.DrawMeleeImpact(actor.body.position, actor.struck ? 0 : Enemies::HitReaction - actor.hurt);
             const auto& ghostActor = session->enemies.Ghost();
             if (ghostActor.discovered && CheckCollisionPointRec(ghostActor.position, visible)
                 && (ghostActor.windup > 0 || ghostActor.attackPulse > 0)
@@ -784,6 +825,11 @@ int main(int argc, char* argv[])
             if (recoil > 0) tint.a = static_cast<unsigned char>(232 + 22 * std::cos(recoil * 12));
             if(!session->dungeon.hidden)DrawPlayer(playerTex, session->player, tint);
             if (!overlayOpen && !session->dungeon.hidden && !session->escape.Completed()) DrawMelee(level, playerPos, session->melee);
+#ifndef NDEBUG
+            if (session->debugAI && !overlayOpen && !session->dungeon.hidden)
+                Enemies::DrawCombatDebug(level, visible, playerPos, FacingVector(session->player.facing),
+                                         session->melee, session->physical);
+#endif
             EndMode2D();
             const auto& angel = session->enemies.Angel();
             const auto& ghost = session->enemies.Ghost();
@@ -805,16 +851,20 @@ int main(int argc, char* argv[])
             else if (!status && angel.windup > 0) status = "Stone grinds closer";
             Hud::DrawLocation(view.width, view.hudScale, level.LocationName(playerCell));
             Hud::DrawStatus(view.width, view.hudScale, status, sanctuary);
-            Hud::DrawHealth(view.width, view.height, view.hudScale, session->health.points,
-                            Enemies::StartingHealth, session->shownHealth);
             char time[24];
             session->clock.Format(time);
-            Hud::DrawRun(view.width, view.height, view.hudScale, Hud::Pixels(view.hudScale, 220), time, session->souls.Total(),session->dungeon.gold);
+            Hud::DrawRun(view.width, view.height, view.hudScale, session->health.points, Enemies::StartingHealth,
+                         session->shownHealth, time, session->souls.Total(), session->dungeon.gold, session->gadgets);
             if(!overlayOpen)
             {
                 const char* prompt=session->dungeon.hidden?"Press E to Exit":session->dungeon.Prompt(session->dungeon.Nearest(playerPos));
                 DrawInteractionPrompt(prompt,view);
-                Hud::DrawCenteredText(TextFormat("Keys: Bronze %s  Silver %s  Escape %s | Exit %s",session->dungeon.HasKey(0)?"yes":"-",session->dungeon.HasKey(1)?"yes":"-",session->dungeon.HasKey(2)?"yes":"-",session->dungeon.exitOpen?"open":"locked"),view.width/2,view.height-73,12,Hud::DimText);
+                const int keyInset = Hud::Pixels(view.hudScale, 16);
+                DrawText(TextFormat("Keys: Bronze %s  Silver %s  Escape %s | Exit %s",
+                    session->dungeon.HasKey(0)?"yes":"-",session->dungeon.HasKey(1)?"yes":"-",
+                    session->dungeon.HasKey(2)?"yes":"-",session->dungeon.exitOpen?"open":"locked"),
+                    keyInset, view.height - keyInset - Hud::Pixels(view.hudScale, 13),
+                    Hud::Pixels(view.hudScale, 13), Hud::DimText);
                 if(session->dungeon.ghostWarning>0)Hud::DrawCenteredText("YOU CANNOT HIDE FROM GHOSTS!",view.width/2,view.height/2-40,20,Fade(RED,std::min(1.0f,session->dungeon.ghostWarning)));
                 if(session->dungeon.pickupFlash>0)
                 {
@@ -850,7 +900,7 @@ int main(int argc, char* argv[])
                 Parchment::DrawCompact(session->exploration, playerPos,
                                        playerCell, view.hudScale,level);
 #ifndef NDEBUG
-                if (session->debugAI) Enemies::DrawDebug(view.width, view.height, session->enemies, session->physical);
+                if (session->debugAI) Enemies::DrawDebug(view.width, view.height, session->enemies, session->physical, session->melee);
 #endif
             }
         }
@@ -864,6 +914,7 @@ int main(int argc, char* argv[])
     menuBackdrop.UnloadTorches();
     bookType.Unload();
     batArt.Unload();
+    gadgetArt.Unload();
     explorationArt.Unload();
     enemySprites.Unload();
     UnloadTexture(playerTex);

@@ -252,8 +252,8 @@ void PhysicalSpawns()
         a.SetSeed(seed);
         b.SetSeed(seed);
         auto update = [&](float dt) {
-            a.Update(dt, player, view, light, map, false, {1,0}, first);
-            b.Update(dt, player, view, light, map, false, {1,0}, second);
+            a.Update(dt, player, view, light, map, first);
+            b.Update(dt, player, view, light, map, second);
         };
         update(0.02f);
         for (const auto& actor : a.Actors())
@@ -287,7 +287,7 @@ void PhysicalCombat()
         f.health.Update(dt);
         f.light.Update(player, facing);
         physical.Update(dt, player, {player.x-110, player.y-110, 220, 220}, f.light, map,
-                        melee.Update(dt, swing, facing), facing, f.health);
+                        f.health, false, melee.Update(dt, swing, facing, player, player));
     };
 
     update(0.02f);
@@ -394,23 +394,20 @@ void RunProgressAndBats()
     bats.Place(42);
     repeat.Place(42);
     for (std::size_t i = 0; i < bats.Actors().size(); ++i)
-        assert(bats.Actors()[i].perch == repeat.Actors()[i].perch);
+        assert(bats.Actors()[i].home == repeat.Actors()[i].home);
     const auto first = &bats.Actors()[0];
-    const Vector2 near = Center(first->perch);
-    bool flown = false, rested = false;
+    bool traveled = false;
     for (int i = 0; i < 1000; ++i)
     {
-        bats.Update(0.02f,near);
-        const auto tile = CellAt(first->perch);
+        const auto before = first->Ground();
+        bats.Update(0.02f);
+        const auto tile = CellAt(CellAt(first->Ground()));
         assert(f.level.IsWalkable(tile.column,tile.row) && !InEntrance(f.level,tile));
-        if (first->destination != NoCell)
-        {
-            assert(Manhattan(first->perch,first->destination) == 1);
-            flown = true;
-        }
-        else if (flown) rested = true;
+        assert(first->destination != NoCell && Manhattan(first->cell,first->destination) <= 1);
+        assert(DistanceSquared(before, first->Ground()) > 0);
+        traveled |= first->cell != first->home;
     }
-    assert(flown && rested && f.health.points == StartingHealth);
+    assert(traveled && f.health.points == StartingHealth);
 }
 
 int main()

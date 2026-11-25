@@ -6,6 +6,7 @@
 
 namespace Enemies
 {
+constexpr float WizardVisualScale = 1.20f;
 enum class Clip { Idle, Move, Attack, Hurt, Death, Count };
 struct AnimationSheet { Texture2D texture{}; int frameSize=0,frames=0; Vector2 anchor{}; float scale=1; };
 
@@ -21,8 +22,9 @@ public:
         const int wizardCounts[]={8,8,8,3,7},demonCounts[]={6,8,7,4,4};
         for(int i=0;i<5;++i)
         {
-            LoadSheet(wizardClips[i],wizard+wizardNames[i],250,wizardCounts[i],{125,167},0.5f);
-            LoadSheet(demonClips[i],demon+demonNames[i],100,demonCounts[i],{50,60},2.0f);
+            LoadSheet(wizardClips[i],wizard+wizardNames[i],250,wizardCounts[i],{125,167},0.5f*WizardVisualScale);
+            // Center the Demon on its planted feet rather than the sheet center.
+            LoadSheet(demonClips[i],demon+demonNames[i],100,demonCounts[i],{54,58},2.0f);
         }
     }
     void Unload()

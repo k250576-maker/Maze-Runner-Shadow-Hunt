@@ -99,15 +99,18 @@ inline Distances MeasureDistances(const Layout& layout)
     return MeasureDistances(layout, layout.spawn);
 }
 
+struct Band { int first; int width; };
+
 struct GeneratedLevel
 {
     Layout layout;
     PassageGraph graph;
     int exitDistance = -1;
+    Band columns[LogicalColumns]{};
+    Band rows[LogicalRows]{};
 };
 
 struct Edge { Cell from; int direction; };
-struct Band { int first; int width; };
 
 template<int Count>
 inline void MakeBands(Band (&bands)[Count], std::mt19937& random)
@@ -243,8 +246,8 @@ inline bool Generate(std::uint32_t seed, GeneratedLevel& result)
 
     result.graph = CarveGraph(bays, random);
     Layout& layout = result.layout;
-    Band columns[LogicalColumns];
-    Band rows[LogicalRows];
+    auto& columns = result.columns;
+    auto& rows = result.rows;
     MakeBands(columns, random);
     MakeBands(rows, random);
 

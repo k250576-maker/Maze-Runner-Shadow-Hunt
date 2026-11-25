@@ -123,7 +123,10 @@ Open **Mobcyclopedia** from the main menu or press **B** while playing.
 Press **B** or **Esc** to close the book. Non-release builds show live AI
 diagnostics with **F3**. Each row reports the state, remaining waypoints,
 nodes removed from the search queue in the latest run, total searches
-and simulation updates. Builds with `NDEBUG` omit the overlay.
+and simulation updates. The combat view outlines the wall-clipped slash,
+enemy body radii and wind-up ranges, flashes a successful hit in green,
+and shows the melee cooldown and buffered input. Builds with `NDEBUG`
+omit the overlay.
 
 Turn the bestiary pages with Left/Right or A/D. Wide windows show a spread
 per creature. Narrow windows show individual leaves. Body text uses a local
@@ -154,21 +157,26 @@ serif font when available.
   hearts and grants 1.5 seconds of immunity to nonlethal hits. Restart rebuilds
   the same seed and resets detection, health, exploration and torches.
 
-- Press **Space** for a short melee swing in the facing direction. A swing
-  can hit each physical enemy once and checks for walls. The cooldown is
-  0.45 seconds. The Sentinel takes three hits, while the Stalker takes one.
+- Press **Space** for a swing that locks its facing when it starts. The
+  cooldown is 0.45 seconds with a 100 ms input buffer. The 38-pixel weapon
+  arc sweeps across Wizard and Demon body radii during its first 120 ms,
+  checking motion between updates and clipping at walls and locked doors.
+  One swing can hit each enemy once. The Wizard takes three hits and the
+  Demon takes one.
 - The Sentinel uses A* with unit floor costs, Manhattan distance, and the
   same indexed min-heap used by Dijkstra. The Stalker reuses the BFS queue
   and alternates fast chases with recovery or retreat. Both wind up before
   dealing one damage and check range, direction, and sight when they strike.
+  Pursuit stops at body contact and an enemy can make room before its next
+  wind-up if the player moved into it during recovery.
 - A fixed pool starts with up to three Sentinels and four Stalkers behind a
   12-second grace period. Replacements are attempted one at a time every 45–75
   seconds and wait 2.5 seconds before pursuit. Up to two physical enemies
   pursue at once. BFS distances, viewport and flashlight exclusion, and spacing
   checks guide placement. BFS takes O(V + E) time and O(V) space. Scanning
   candidates and comparing up to the fixed cap adds O(V) work per replacement.
-- The Sentinel detects within seven cells and the Stalker within six, subject
-  to line of sight and the ten-cell home leash. Both remember the last seen
+- The Wizard detects within six cells and the Demon within five, subject
+  to line of sight and their nine- and eight-cell home leashes. Both remember the last seen
   position for up to three seconds. A* has O((V + E) log V) worst-case time
   with the indexed heap and O(V) space. The Stalker's BFS takes O(V + E) time
   and O(V) space.
@@ -176,12 +184,14 @@ serif font when available.
   combines drops on the same tile. Drops and nearby collection take O(1) time,
   and storage takes O(V) space. The HUD shows collected souls and active time.
   Game Over reports the time, score, and seed.
-- Fourteen decorative bats rest, flutter between walkable tiles, and sometimes
-  flee when approached. The game uses two animated poses drawn in code.
-  An optional local two-frame `assets/characters/bat.png` overrides that art.
-  The supplied demon, blood monster, and staff-wielding wizard sheets depict
-  different creatures. The two physical enemies use code-drawn placeholders
-  until matching art is available.
+- Fourteen decorative bats flutter continuously through nearby walkable
+  tiles. Each has its own speed and route, chooses a new edge when blocked,
+  and replans after 0.75 seconds without meaningful progress. Wings animate
+  independently of the player's position and light. The art uses the existing
+  two-frame bat sprite when available, with two drawn poses as fallback.
+  The two physical enemies use their matched Wizard and Demon animation sets
+  with point filtering and feet anchored to their world positions.
+  The Wizard's dungeon sprite is drawn at 120% of its previous scale.
 
 ### Reproduce the navigation checks
 
@@ -240,4 +250,59 @@ Generation, rewards and hiding checks:
 ```powershell
 g++ -std=c++17 -Wall -Wextra tests/exploration_logic.cpp -o build/exploration-logic.exe -lraylib -lopengl32 -lgdi32 -lwinmm
 & ./build/exploration-logic.exe
+```
+
+## Survival gadgets and ending audio
+
+The main menu doorway contains independently blinking eyes that fade in
+and out of the dark. During play the HUD shows the two gadget quantities
+and their hotkeys beneath the health and run statistics.
+
+Walk over gadgets to collect them. **Q** deploys a Smoke Bomb for 3 seconds.
+A Wizard or Demon loses visual tracking while you are in the smoke, and its
+existing attack can still connect up close. **R** places a Soul Lure for
+5 seconds. It pulls nearby physical enemies from up to seven tiles away
+along walkable routes within their territories. The Angel and Ghost follow
+their existing rules. Effects and run time pause with gameplay.
+
+Each seed places five bombs and four lures across different path-distance
+bands, favoring some chambers and dead ends. Candidates exclude gates, keys,
+chests, barrels, torch sites, the spawn, and the exit. Each gadget type has
+a carrying limit of three. Excess pickups stay on the floor, and restarting
+clears the inventory and deployed effects.
+
+For the DSA viva, let `k` be the number of distinct held item types and
+`P` be the pickup count. The custom singly linked list uses **O(k)** space.
+Finding, adding, and consuming take **O(k)** worst-case time. Inserting a new
+head and unlinking a depleted node after traversal each take **O(1)** time.
+Clearing takes **O(k)** time and **O(1)** auxiliary space. Placement uses
+the existing custom-queue BFS for distances, then scores valid cells
+against distance, terrain, and spacing. It takes **O(V + E + PV)** time
+and **O(V + P)** space. Lures reuse Wizard A* (**O((V + E) log V)**)
+and Demon BFS (**O(V + E)**), both with **O(V)** search space.
+
+The repo includes the original gadget art in `include/gadget_art.h` and
+the 7.2-second Music-category victory cue in `assets/audio/music/victory.wav`.
+Run `python tools/generate_victory.py` to regenerate the cue.
+
+For the optional animated smoke and melee impact sheets, get the
+[Smoke & Dust Free Version from Frostwindz](https://frostwindz.itch.io/pixel-art-vfx-smoke-dust-free-version).
+Install the `VFX2`, `VFX3`, and `VFX4` folders under
+`assets/enviroment/vfx/`, keeping each folder's `sprite-sheet.png`.
+VFX2 is the deployment burst, VFX3 is the smoke cloud, and VFX4 is the
+melee spark. The included license restricts redistribution of the raw
+sheets. A clean checkout uses the built-in smoke art and enemy hit reactions.
+
+The optional Wizard wind-up and defeat recordings are loaded locally from
+`assets/audio/sfx/wizard-2.mp3` and `assets/audio/sfx/Game_Over_3.wav`.
+Their redistribution rights are unverified, so the repo leaves those
+recordings out. The Wizard attack and defeat screen work without them.
+The mixer applies Master once and routes the victory cue through Music and
+the recorded and gadget effects through SFX. See [asset credits](assets/audio/CREDITS.txt).
+
+```powershell
+g++ -std=c++17 -Wall -Wextra -Wpedantic tests/gadget_logic.cpp -o build/gadget-logic.exe -lraylib -lopengl32 -lgdi32 -lwinmm
+& ./build/gadget-logic.exe
+g++ -std=c++17 -Wall -Wextra -Wpedantic tests/combat_consistency.cpp -o build/combat-consistency.exe -lraylib -lopengl32 -lgdi32 -lwinmm
+& ./build/combat-consistency.exe
 ```

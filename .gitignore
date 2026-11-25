@@ -25,3 +25,9 @@
 /assets/audio/music/rich_house.*
 /assets/audio/music/elmshore.*
 /assets/audio/sfx/footsteps-use-it-again.mp3
+/assets/audio/sfx/wizard-2.mp3
+/assets/audio/sfx/Game_Over_2.wav
+/assets/audio/sfx/Game_Over_3.wav
+
+# Frostwindz's local Smoke & Dust pack restricts redistribution of raw assets.
+/assets/enviroment/vfx/

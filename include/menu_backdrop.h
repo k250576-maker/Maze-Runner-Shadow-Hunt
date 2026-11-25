@@ -5,6 +5,7 @@
 #include "raylib.h"
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <string>
 
 namespace MenuBackdrop
@@ -15,6 +16,22 @@ constexpr float StackedZoom = 1.84f;
 class Castle
 {
 public:
+    void UpdateEyes(float dt)
+    {
+        for (auto& eye : eyes)
+        {
+            eye.blink -= dt;
+            if (eye.blink < -BlinkDuration) eye.blink = eye.Next(2.7f, 8.6f);
+            eye.fade -= dt;
+            if (eye.fade <= 0)
+            {
+                eye.hidden = !eye.hidden;
+                eye.fade = eye.hidden ? eye.Next(2.0f, 4.8f) : eye.Next(14.0f, 35.0f);
+            }
+            eye.opacity = std::clamp(eye.opacity + dt * (eye.hidden ? -1.1f : 1.1f), 0.0f, 1.0f);
+        }
+    }
+
     void LoadTorches(const std::string& assetRoot)
     {
         for (std::size_t i = 0; i < flames.size(); ++i)
@@ -51,6 +68,7 @@ public:
         DrawMasonry(stone, left, right, top);
         DrawFloor(stone, left, right, bottom);
         DrawGate(stone);
+        DrawEyes();
         DrawTorch(-60, -63, time, 0);
         DrawTorch(60, -63, time, 2);
         DrawRunner(player);
@@ -68,6 +86,48 @@ public:
     }
 
 private:
+    static constexpr float BlinkDuration = 0.23f;
+    struct EyePair
+    {
+        int x, y, gap, width, shape;
+        Color tint;
+        std::uint32_t random;
+        float blink, fade, opacity = 1;
+        bool hidden = false;
+
+        float Next(float low, float high)
+        {
+            random = random * 1664525u + 1013904223u;
+            return low + (high - low) * ((random >> 8) / 16777216.0f);
+        }
+    };
+
+    void DrawEyes() const
+    {
+        for (const auto& eye : eyes)
+        {
+            const float openness = eye.blink >= 0 ? 1 :
+                std::abs(2 * (-eye.blink / BlinkDuration) - 1);
+            if (openness < 0.30f || eye.opacity < 0.04f) continue;
+            const int band = openness > 0.65f ? 2 : 1;
+            const Color tint = Fade(eye.tint, eye.opacity * (0.68f + openness * 0.32f));
+            for (const int side : {-1, 1})
+            {
+                const int inner = eye.x + eye.gap * side;
+                for (int column = 0; column < eye.width; ++column)
+                {
+                    const int x = inner + column * side;
+                    const int y = eye.y + (eye.shape == 0 ? (eye.width - 1 - column) / 2 :
+                                          eye.shape == 1 ? 0 : column / 2);
+                    const int thickness = column == 0 || column == eye.width - 1 ? 1 : band;
+                    DrawRectangle(x, y, 1, thickness, tint);
+                    if (column == 1 && thickness > 1 && eye.width >= 4)
+                        DrawRectangle(x, y, 1, 1, Fade({43, 19, 22, 255}, eye.opacity * 0.72f));
+                }
+            }
+        }
+    }
+
     static void DrawMasonry(Texture2D stone, int left, int right, int top)
     {
         for (int y = -32; y > top - 32; y -= 32)
@@ -193,6 +253,14 @@ private:
     }
 
     std::array<Texture2D, 4> flames{};
+    std::array<EyePair, 6> eyes{{
+        {-11, -74, 2, 4, 0, {145, 42, 49, 255}, 7919, 3.15f, 20.2f},
+        { 10, -68, 2, 3, 2, {114, 36, 45, 255}, 3167, 5.42f, 31.4f},
+        { -2, -62, 3, 5, 0, {130, 39, 47, 255}, 6367, 7.23f, 16.6f},
+        {-11, -51, 2, 3, 1, {123, 65, 36, 255}, 1223, 2.46f, 23.3f},
+        { 10, -41, 2, 3, 2, {132, 37, 44, 255}, 2347, 6.48f, 18.0f},
+        {  4, -79, 1, 2, 1, {104, 39, 45, 255}, 4319, 4.16f, 14.9f}
+    }};
 };
 }
 #endif
